@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::config::OpenAIConfig;
 use crate::models::Thread;
 use anyhow::{Result, anyhow};

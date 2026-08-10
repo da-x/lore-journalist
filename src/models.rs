@@ -18,13 +18,3 @@ pub struct Thread {
     pub subject: String,
     pub messages: Vec<EmailMessage>,
 }
-
-impl Thread {
-    pub fn last_activity(&self) -> DateTime<Utc> {
-        self.messages
-            .iter()
-            .map(|m| m.date)
-            .max()
-            .expect("Thread must have at least one message")
-    }
-}

@@ -2,7 +2,7 @@ use crate::models::EmailMessage;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use git2::{Blob, Oid, Repository};
-use mailparse::{parse_mail, MailHeaderMap};
+use mailparse::{MailHeaderMap, parse_mail};
 use std::vec;
 
 pub struct GitHandler {
@@ -13,67 +13,6 @@ impl GitHandler {
     pub fn open(path: &str) -> Result<Self> {
         let repo = Repository::open(path).context("Failed to open git repository")?;
         Ok(Self { repo })
-    }
-
-    pub fn get_latest_message_date(&self) -> Result<DateTime<Utc>> {
-        let mut revwalk = self.repo.revwalk()?;
-        let head = self.repo.revparse_single("HEAD")?.id();
-        revwalk.push(head)?;
-
-        for id in revwalk {
-            let id = id?;
-            let commit = self.repo.find_commit(id)?;
-            let tree = commit.tree()?;
-            if tree.get_name("m").is_some() {
-                return Utc
-                    .timestamp_opt(commit.time().seconds(), 0)
-                    .single()
-                    .context("Invalid commit timestamp");
-            }
-        }
-
-        Err(anyhow::anyhow!("No email messages found in repository"))
-    }
-
-    pub fn get_messages(
-        &self,
-        now: DateTime<Utc>,
-        lookback_days: i64,
-    ) -> Result<Vec<EmailMessage>> {
-        let cutoff = now - chrono::Duration::days(lookback_days);
-
-        let mut revwalk = self.repo.revwalk()?;
-        let head = self.repo.revparse_single("HEAD")?.id();
-        revwalk.push(head)?;
-
-        let mut messages = Vec::new();
-
-        for id in revwalk {
-            let id = id?;
-            let commit = self.repo.find_commit(id)?;
-            let commit_time = Utc
-                .timestamp_opt(commit.time().seconds(), 0)
-                .single()
-                .context("Invalid commit timestamp")?;
-
-            if commit_time > now {
-                continue;
-            }
-
-            if commit_time < cutoff {
-                break;
-            }
-
-            let tree = commit.tree()?;
-            if let Some(entry) = tree.get_name("m") {
-                let blob = self.repo.find_blob(entry.id())?;
-                if let Ok(msg) = parse_email_blob(&blob, commit_time) {
-                    messages.push(msg);
-                }
-            }
-        }
-
-        Ok(messages)
     }
 
     /// Consume the handler and return a streaming iterator over every email
@@ -115,10 +54,6 @@ impl MessageIter {
     /// Number of mail commits discovered in the repository.
     pub fn len(&self) -> u64 {
         self.total
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.total == 0
     }
 }
 

@@ -3,7 +3,6 @@ mod content_cleaner;
 mod email_index;
 mod git_handler;
 mod grep_cmd;
-mod mail_processor;
 mod models;
 mod openai_client;
 
@@ -13,8 +12,8 @@ use crate::git_handler::GitHandler;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::ConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::info;

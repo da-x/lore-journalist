@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub fn clean_email_body(body: &str) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut cleaned_lines = Vec::new();
