@@ -2,6 +2,7 @@ mod config;
 mod content_cleaner;
 mod email_index;
 mod git_handler;
+mod grep_cmd;
 mod mail_processor;
 mod models;
 mod openai_client;
@@ -34,6 +35,11 @@ enum Commands {
     BuildDB {},
     /// Load all email metadata from the database into memory.
     Meta {},
+    /// Search email threads with a regex; matching spans are green on a TTY.
+    Grep {
+        /// Regular expression to search for in composed Subject + Body text.
+        pattern: String,
+    },
 }
 
 #[tokio::main]
@@ -55,6 +61,10 @@ async fn main() -> Result<()> {
         }
         Commands::Meta {} => {
             meta(config).await?;
+        }
+        Commands::Grep { pattern } => {
+            let pool = open_db(&config.db_path, false).await?;
+            grep_cmd::run_grep(&pool, &pattern).await?;
         }
     }
 
