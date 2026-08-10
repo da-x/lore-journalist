@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT body AS \"body!\" FROM emails WHERE message_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "body!",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "88c4cf6d8929a7ac93950e9065fc715d9b2b8570294ea35d17868936b5fbd9f5"
+}

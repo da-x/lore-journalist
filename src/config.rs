@@ -8,7 +8,7 @@ pub struct Config {
     #[serde(default = "default_base_url")]
     pub base_url: String,
     #[serde(default)]
-    pub previous_outputs_path: Option<String>,
+    pub outputs_path: Option<String>,
 }
 
 fn default_base_url() -> String {

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT message_id, subject, from_addr, date, in_reply_to, \"references\" AS references_json\n            FROM emails\n            ORDER BY date\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "message_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "subject",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "from_addr",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "date",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "in_reply_to",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "references_json",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "824fd02cb193eaf0e83a987f7361bb312fd7979ba65fbe5ddc2ab1562a7c1d00"
+}
