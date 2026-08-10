@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub openai: OpenAIConfig,
     pub git_repo_path: String,
+    pub db_path: String,
     #[serde(default = "default_base_url")]
     pub base_url: String,
     #[serde(default)]

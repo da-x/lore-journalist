@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT OR IGNORE INTO emails\n                (message_id, subject, from_addr, date, body, in_reply_to, \"references\")\n            VALUES (?, ?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "56901bcc6c6dd5ef2f7662265297ccfdf24be19a7fb423ada534fafd2fb1d15e"
+}

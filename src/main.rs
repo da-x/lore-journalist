@@ -7,12 +7,14 @@ mod openai_client;
 
 use crate::config::Config;
 use crate::git_handler::GitHandler;
-use crate::mail_processor::process_threads;
-use crate::openai_client::OpenAIClient;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::ConnectOptions;
 use std::path::PathBuf;
-use tracing::{error, info, warn};
+use std::str::FromStr;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -53,11 +55,98 @@ async fn main() -> Result<()> {
 }
 
 async fn build_db(config: Config) -> Result<()> {
-    let g = GitHandler::open(&config.git_repo_path);
+    info!("Opening git repository at: {}", config.git_repo_path);
+    let g = GitHandler::open(&config.git_repo_path)?;
 
-    // TODO: Let's add sqlx here and build an sqlite database using sqlx::query! that will
-    // include all the mails, based on the fields in the `EmailMessage` struct, and where
-    // the body is compressed in zstd.
+    info!("Connecting to SQLite database at: {}", config.db_path);
+    let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", config.db_path))?
+        .create_if_missing(true)
+        .disable_statement_logging();
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .with_context(|| format!("Failed to open SQLite database: {}", config.db_path))?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS emails (
+            message_id TEXT PRIMARY KEY NOT NULL,
+            subject TEXT NOT NULL,
+            from_addr TEXT NOT NULL,
+            date TEXT NOT NULL,
+            body BLOB NOT NULL,
+            in_reply_to TEXT,
+            "references" TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .context("Failed to create emails table")?;
+
+    info!("Scanning git repository for messages...");
+    let messages = g.get_all_messages()?;
+    let total = messages.len();
+    info!("Found {total} messages; inserting new ones into database...");
+
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+        )
+        .context("Invalid progress bar template")?
+        .progress_chars("=>-"),
+    );
+    pb.set_message("inserting emails");
+
+    let mut tx = pool.begin().await?;
+    let mut inserted = 0usize;
+    let mut skipped = 0usize;
+
+    for msg in messages {
+        let msg = msg?;
+        let body_compressed = zstd::encode_all(msg.body.as_bytes(), 3)
+            .context("Failed to zstd-compress email body")?;
+        let references_json =
+            serde_json::to_string(&msg.references).context("Failed to serialize references")?;
+        let date = msg.date.to_rfc3339();
+
+        // Skip rows that already exist (by message_id primary key).
+        let result = sqlx::query!(
+            r#"
+            INSERT OR IGNORE INTO emails
+                (message_id, subject, from_addr, date, body, in_reply_to, "references")
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+            msg.message_id,
+            msg.subject,
+            msg.from,
+            date,
+            body_compressed,
+            msg.in_reply_to,
+            references_json,
+        )
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("Failed to insert message {}", msg.message_id))?;
+
+        if result.rows_affected() > 0 {
+            inserted += 1;
+        } else {
+            skipped += 1;
+        }
+        pb.inc(1);
+    }
+
+    tx.commit().await.context("Failed to commit transaction")?;
+    pb.finish_with_message("done");
+
+    info!(
+        "Wrote {inserted} new emails to {} (skipped {skipped} already present)",
+        config.db_path
+    );
 
     Ok(())
 }
