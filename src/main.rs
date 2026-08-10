@@ -1,5 +1,6 @@
 mod config;
 mod content_cleaner;
+mod email_index;
 mod git_handler;
 mod mail_processor;
 mod models;
