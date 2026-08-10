@@ -7,11 +7,12 @@ mod models;
 mod openai_client;
 
 use crate::config::Config;
+use crate::email_index::EmailIndex;
 use crate::git_handler::GitHandler;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::ConnectOptions;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -31,6 +32,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     BuildDB {},
+    /// Load all email metadata from the database into memory.
+    Meta {},
 }
 
 #[tokio::main]
@@ -50,6 +53,40 @@ async fn main() -> Result<()> {
         Commands::BuildDB {} => {
             build_db(config).await?;
         }
+        Commands::Meta {} => {
+            meta(config).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn open_db(db_path: &str, create_if_missing: bool) -> Result<SqlitePool> {
+    info!("Connecting to SQLite database at: {db_path}");
+    let options = SqliteConnectOptions::from_str(&format!("sqlite:{db_path}"))?
+        .create_if_missing(create_if_missing)
+        .disable_statement_logging();
+
+    SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .with_context(|| format!("Failed to open SQLite database: {db_path}"))
+}
+
+async fn meta(config: Config) -> Result<()> {
+    let pool = open_db(&config.db_path, false).await?;
+
+    info!("Loading email metadata into memory...");
+    let index = EmailIndex::load(&pool).await?;
+
+    info!("Loaded {} emails into memory", index.len());
+    if let (Some(first), Some(last)) = (index.emails().first(), index.emails().last()) {
+        info!(
+            "Date range: {} .. {}",
+            first.date.format("%Y-%m-%d"),
+            last.date.format("%Y-%m-%d")
+        );
     }
 
     Ok(())
@@ -59,17 +96,7 @@ async fn build_db(config: Config) -> Result<()> {
     info!("Opening git repository at: {}", config.git_repo_path);
     let g = GitHandler::open(&config.git_repo_path)?;
 
-    info!("Connecting to SQLite database at: {}", config.db_path);
-    let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", config.db_path))?
-        .create_if_missing(true)
-        .disable_statement_logging();
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .with_context(|| format!("Failed to open SQLite database: {}", config.db_path))?;
-
+    let pool = open_db(&config.db_path, true).await?;
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS emails (
