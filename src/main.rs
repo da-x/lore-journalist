@@ -45,13 +45,19 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::BuildDB {} => {
-            build_db().await?;
+            build_db(config).await?;
         }
     }
 
     Ok(())
 }
 
-async fn build_db() -> Result<()> {
+async fn build_db(config: Config) -> Result<()> {
+    let g = GitHandler::open(&config.git_repo_path);
+
+    // TODO: Let's add sqlx here and build an sqlite database using sqlx::query! that will
+    // include all the mails, based on the fields in the `EmailMessage` struct, and where
+    // the body is compressed in zstd.
+
     Ok(())
 }
