@@ -21,7 +21,13 @@ const ORDER_SYSTEM: &str = r#"You are planning work for a serial weekly mailing-
 Given the catalog of discussions active this week, decide the order in which they should be summarized.
 Prefer: foundational patches / parent series before follow-ups; discussions that other threads cite before dependents; independent topics last or by last activity.
 Use tools if helpful to check subjects and related roots. Do NOT write summaries.
-Call SubmitThreadOrder exactly once with every catalog root_id exactly once (a permutation).
+
+CRITICAL — SubmitThreadOrder:
+- Call SubmitThreadOrder exactly once.
+- ordered_root_ids MUST be a permutation of the REQUIRED_ROOT_IDS list in the user message.
+- Copy each root_id EXACTLY (including angle brackets). No trailing commas, quotes, or ellipses.
+- Include EVERY required id exactly once — no omissions, no extras, no duplicates.
+- Count must equal N_REQUIRED.
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,13 +52,24 @@ pub fn load_valid_thread_order(
         .with_context(|| format!("read {}", path.display()))?;
     let file: ThreadOrderFile = serde_json::from_str(&text)
         .with_context(|| format!("parse {}", path.display()))?;
-    match validate_permutation(&file.ordered_root_ids, expected) {
-        Ok(order) => {
-            info!(%week, "reusing valid .thread-order.json");
+    // Prefer strict reuse; fall back to repair if file is slightly dirty.
+    match coerce_to_permutation(&file.ordered_root_ids, expected, &[]) {
+        Ok((order, report)) => {
+            if report.changed() {
+                warn!(
+                    %week,
+                    dropped_unknown = report.dropped_unknown.len(),
+                    dropped_dupes = report.dropped_duplicates,
+                    appended = report.appended.len(),
+                    "repaired .thread-order.json on load"
+                );
+            } else {
+                info!(%week, "reusing valid .thread-order.json");
+            }
             Ok(Some(order))
         }
         Err(e) => {
-            warn!(%week, error = %e, "ignoring invalid .thread-order.json");
+            warn!(%week, error = %e, "ignoring unusable .thread-order.json");
             Ok(None)
         }
     }
@@ -74,33 +91,157 @@ pub fn write_thread_order_file(
     Ok(())
 }
 
-/// Normalize and require a permutation of expected root ids.
+/// Strip common LLM junk around Message-IDs (trailing commas, quotes, etc.).
+pub fn sanitize_root_id(id: &str) -> String {
+    let mut s = normalize_message_id(id);
+    // Repeatedly strip trailing junk the model often appends in JSON/lists.
+    loop {
+        let before = s.clone();
+        s = s
+            .trim_matches(|c: char| {
+                c.is_whitespace()
+                    || c == ','
+                    || c == ';'
+                    || c == '"'
+                    || c == '\''
+                    || c == '`'
+                    || c == '|'
+            })
+            .to_string();
+        // Trailing ellipsis / "..."
+        if s.ends_with("...") {
+            s.truncate(s.len() - 3);
+            s = s.trim_end().to_string();
+        }
+        if s == before {
+            break;
+        }
+    }
+    s
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct OrderRepairReport {
+    pub dropped_unknown: Vec<String>,
+    pub dropped_duplicates: usize,
+    pub appended: Vec<String>,
+    pub sanitized_from: Vec<(String, String)>, // (raw, cleaned) when different
+}
+
+impl OrderRepairReport {
+    /// Any host-side change (including id sanitization).
+    pub fn changed(&self) -> bool {
+        self.structural_change() || !self.sanitized_from.is_empty()
+    }
+
+    /// Drops / appends (not mere whitespace/comma cleanup).
+    pub fn structural_change(&self) -> bool {
+        !self.dropped_unknown.is_empty()
+            || self.dropped_duplicates > 0
+            || !self.appended.is_empty()
+    }
+}
+
+/// Coerce a model-provided order into a full permutation of `expected`.
+///
+/// - Sanitizes each id (trim, strip trailing commas)
+/// - Drops unknowns and duplicates (first wins)
+/// - Appends any missing ids in `catalog_order` sequence (fallback: sorted)
+///
+/// `catalog_order` should be the host catalog order (e.g. active threads list).
+pub fn coerce_to_permutation(
+    ordered: &[String],
+    expected: &HashSet<String>,
+    catalog_order: &[String],
+) -> Result<(Vec<String>, OrderRepairReport)> {
+    if expected.is_empty() {
+        bail!("expected root set is empty");
+    }
+
+    let mut report = OrderRepairReport::default();
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(expected.len());
+
+    for id in ordered {
+        let raw = id.to_string();
+        let n = sanitize_root_id(id);
+        if n != raw {
+            report.sanitized_from.push((raw, n.clone()));
+        }
+
+        if n.is_empty() {
+            continue;
+        }
+        if !expected.contains(&n) {
+            report.dropped_unknown.push(n);
+            continue;
+        }
+        if !seen.insert(n.clone()) {
+            report.dropped_duplicates += 1;
+            continue;
+        }
+        out.push(n);
+    }
+
+    // Append missing in catalog order, then any remaining sorted.
+    let missing: HashSet<String> = expected.difference(&seen).cloned().collect();
+    if !missing.is_empty() {
+        let mut ordered_missing = Vec::new();
+        for c in catalog_order {
+            let c = sanitize_root_id(c);
+            if missing.contains(&c) && !ordered_missing.contains(&c) {
+                ordered_missing.push(c);
+            }
+        }
+        let mut rest: Vec<_> = missing
+            .into_iter()
+            .filter(|m| !ordered_missing.contains(m))
+            .collect();
+        rest.sort();
+        ordered_missing.extend(rest);
+
+        for m in ordered_missing {
+            report.appended.push(m.clone());
+            out.push(m);
+        }
+    }
+
+    if out.len() != expected.len() {
+        bail!(
+            "failed to build full permutation: got {} ids, expected {}",
+            out.len(),
+            expected.len()
+        );
+    }
+    let got: HashSet<_> = out.iter().cloned().collect();
+    if got != *expected {
+        bail!("repaired order still does not match expected set");
+    }
+    Ok((out, report))
+}
+
+/// Strict validate: must already be a clean permutation (only whitespace normalize ok).
+#[allow(dead_code)] // used in tests / optional strict callers
 pub fn validate_permutation(
     ordered: &[String],
     expected: &HashSet<String>,
 ) -> Result<Vec<String>> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::with_capacity(ordered.len());
-    for id in ordered {
-        let n = normalize_message_id(id);
-        if !expected.contains(&n) {
-            bail!("ordered root not in expected set: {n}");
-        }
-        if !seen.insert(n.clone()) {
-            bail!("duplicate root in order: {n}");
-        }
-        out.push(n);
+    let (order, report) = coerce_to_permutation(ordered, expected, &[])?;
+    if report.structural_change() {
+        bail!(
+            "order is not a clean permutation (dropped_unknown={}, dupes={}, appended={})",
+            report.dropped_unknown.len(),
+            report.dropped_duplicates,
+            report.appended.len()
+        );
     }
-    if seen.len() != expected.len() {
-        let missing: Vec<_> = expected.difference(&seen).cloned().collect();
-        bail!("order missing {} root(s), e.g. {:?}", missing.len(), missing.first());
-    }
-    Ok(out)
+    Ok(order)
 }
 
 pub fn build_order_user_message(week: NaiveDate, active: &[ActiveThread]) -> String {
+    let n = active.len();
     let mut s = format!(
-        "Week ending: {}\nOrder these discussions for serial summarization.\n\nCatalog:\n",
+        "Week ending: {}\nN_REQUIRED: {n}\nOrder these discussions for serial summarization.\n\nCatalog:\n",
         week.format("%Y-%m-%d")
     );
     for (i, t) in active.iter().enumerate() {
@@ -112,8 +253,15 @@ pub fn build_order_user_message(week: NaiveDate, active: &[ActiveThread]) -> Str
             t.subject
         ));
     }
+    s.push_str(&format!(
+        "\nREQUIRED_ROOT_IDS (exactly {n}; copy each line exactly into ordered_root_ids):\n"
+    ));
+    for t in active {
+        s.push_str(&t.root_id);
+        s.push('\n');
+    }
     s.push_str(
-        "\nCall SubmitThreadOrder with every root_id exactly once.\n",
+        "\nCall SubmitThreadOrder once with ordered_root_ids = a permutation of REQUIRED_ROOT_IDS (same count, no trailing commas).\n",
     );
     s
 }
@@ -164,11 +312,27 @@ pub async fn obtain_thread_order(
     .await
     .context("ordering agent")?;
 
-    let order = validate_permutation(&payload.ordered_root_ids, &expected)
-        .context("SubmitThreadOrder validation")?;
+    let catalog: Vec<String> = active.iter().map(|t| t.root_id.clone()).collect();
+    let (order, report) = coerce_to_permutation(&payload.ordered_root_ids, &expected, &catalog)
+        .context("SubmitThreadOrder validation/repair")?;
+    if report.changed() {
+        warn!(
+            %week,
+            dropped_unknown = ?report.dropped_unknown,
+            dropped_dupes = report.dropped_duplicates,
+            appended = ?report.appended,
+            sanitized = report.sanitized_from.len(),
+            "repaired LLM thread order into a full permutation"
+        );
+    }
+    let notes = match (payload.notes, report.changed()) {
+        (Some(n), true) => Some(format!("{n} [host-repaired order]")),
+        (None, true) => Some("host-repaired order".into()),
+        (n, false) => n,
+    };
     let payload = ThreadOrderPayload {
         ordered_root_ids: order.clone(),
-        notes: payload.notes,
+        notes,
     };
     write_thread_order_file(&ctx.outputs_path, week, &payload)?;
     info!(%week, n = order.len(), "wrote .thread-order.json");
@@ -180,25 +344,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn permutation_ok_and_errors() {
+    fn sanitize_strips_trailing_comma() {
+        assert_eq!(
+            sanitize_root_id("<20251230141838.2547848-1-cel@kernel.org>,"),
+            "<20251230141838.2547848-1-cel@kernel.org>"
+        );
+        assert_eq!(sanitize_root_id("  <a@b>, "), "<a@b>");
+    }
+
+    #[test]
+    fn coerce_repairs_trailing_commas_and_missing() {
         let exp: HashSet<_> = ["<a>", "<b>", "<c>"].into_iter().map(String::from).collect();
+        let catalog = vec!["<a>".into(), "<b>".into(), "<c>".into()];
+        let (order, report) = coerce_to_permutation(
+            &["<b>,".into(), "<a>".into()],
+            &exp,
+            &catalog,
+        )
+        .unwrap();
+        assert_eq!(order, vec!["<b>", "<a>", "<c>"]);
+        assert!(report.appended.contains(&"<c>".to_string()));
+        assert!(!report.sanitized_from.is_empty() || order[0] == "<b>");
+    }
+
+    #[test]
+    fn coerce_drops_unknown_and_dupes() {
+        let exp: HashSet<_> = ["<a>", "<b>"].into_iter().map(String::from).collect();
+        let catalog = vec!["<a>".into(), "<b>".into()];
+        let (order, report) = coerce_to_permutation(
+            &["<a>".into(), "<x>".into(), "<a>".into(), "<b>".into()],
+            &exp,
+            &catalog,
+        )
+        .unwrap();
+        assert_eq!(order, vec!["<a>", "<b>"]);
+        assert_eq!(report.dropped_duplicates, 1);
+        assert!(report.dropped_unknown.iter().any(|u| u == "<x>"));
+    }
+
+    #[test]
+    fn strict_validate_rejects_incomplete() {
+        let exp: HashSet<_> = ["<a>", "<b>", "<c>"].into_iter().map(String::from).collect();
+        // validate_permutation fails if repair would be needed
+        assert!(validate_permutation(&["<a>".into(), "<b>".into()], &exp).is_err());
         let ok = validate_permutation(
             &[" <b>".into(), "<a>".into(), "<c>".into()],
             &exp,
         )
         .unwrap();
         assert_eq!(ok, vec!["<b>", "<a>", "<c>"]);
-
-        assert!(validate_permutation(&["<a>".into(), "<b>".into()], &exp).is_err());
-        assert!(validate_permutation(
-            &["<a>".into(), "<b>".into(), "<c>".into(), "<a>".into()],
-            &exp
-        )
-        .is_err());
-        assert!(validate_permutation(
-            &["<a>".into(), "<b>".into(), "<x>".into()],
-            &exp
-        )
-        .is_err());
     }
 }
