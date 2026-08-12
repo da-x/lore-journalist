@@ -37,7 +37,6 @@ pub fn complete_marker_path(outputs_path: &Path, w: NaiveDate) -> PathBuf {
 }
 
 /// `{outputs}/{W}/.thread-order.json`.
-#[allow(dead_code)] // ordering agent (PR5+)
 pub fn thread_order_path(outputs_path: &Path, w: NaiveDate) -> PathBuf {
     week_dir(outputs_path, w).join(".thread-order.json")
 }
@@ -48,7 +47,6 @@ pub fn thread_dir(outputs_path: &Path, w: NaiveDate) -> PathBuf {
 }
 
 /// `{outputs}/{W}/thread/{stem}.md` for a thread root id (any form; normalized inside).
-#[allow(dead_code)] // thread agents (PR5+)
 pub fn thread_markdown_path(outputs_path: &Path, w: NaiveDate, thread_root_id: &str) -> PathBuf {
     use crate::ids::file_stem_for_id;
     let stem = file_stem_for_id(thread_root_id);
@@ -57,7 +55,6 @@ pub fn thread_markdown_path(outputs_path: &Path, w: NaiveDate, thread_root_id: &
 
 /// Glob pattern (relative to `outputs_path`) for all weeks of a thread:
 /// `*/thread/{stem}.md`.
-#[allow(dead_code)] // prior-week discovery (PR5+)
 pub fn prior_thread_glob_pattern(thread_root_id: &str) -> String {
     use crate::ids::file_stem_for_id;
     let stem = file_stem_for_id(thread_root_id);
@@ -181,7 +178,6 @@ pub fn write_complete_marker(outputs_path: &Path, w: NaiveDate) -> Result<()> {
 }
 
 /// Host-built markdown list of messages for a thread file, linking to lore.
-#[allow(dead_code)] // used when writing thread/*.md (PR5+)
 pub fn format_message_list_lore(
     lore_base: &str,
     items: &[(/* date label */ String, /* from */ String, /* subject */ String, /* message_id */ String)],

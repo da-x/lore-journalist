@@ -145,6 +145,7 @@ pub fn subject_tokens(subject: &str) -> HashSet<String> {
 }
 
 /// Normalize a list of roots for allow-list.
+#[allow(dead_code)] // used by ordering agent host + tests
 pub fn normalize_root_set(roots: impl IntoIterator<Item = impl AsRef<str>>) -> HashSet<String> {
     roots
         .into_iter()

@@ -1,28 +1,33 @@
-//! Host-side weekly preparation (PR2): empty-week stubs + active-thread selection.
+//! Host-side weekly pipeline: empty stubs, ordering, serial thread agents.
 //!
 //! Cleaned email bodies stay in SQLite and are fed to inference tools only.
 //! Published markdown cites messages via lore.kernel.org URLs (see `crate::lore`).
-//! Later PRs add ordering / thread / overview agents.
+//! Week overview + `.complete` for non-empty weeks land in PR6.
 
+use crate::agent::order::obtain_thread_order;
+use crate::agent::thread::run_thread_agent;
 use crate::email_index::{thread_root_id, EmailIndex, EmailMeta};
 use crate::outputs::{
-    complete_marker_path, ensure_week_layout, week_index_path, write_complete_marker,
-    write_empty_week_index, write_root_index, RootIndexEntry,
+    complete_marker_path, ensure_week_layout, thread_markdown_path, week_index_path,
+    write_complete_marker, write_empty_week_index, write_root_index, RootIndexEntry,
 };
+use crate::tools::ToolCtx;
 use crate::week::{
     assert_week_ended, resolve_week_from_outputs, scan_week_dirs, week_window, ResolveWeekOutcome,
 };
 use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
+use da_harness::multi_tool::InferenceCallback;
+use da_harness::OpenAIClient;
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use std::sync::Arc;
+use tracing::{error, info, warn};
 
 /// One active thread for the week (in-window message indices into the index).
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields consumed by ordering/thread agents in later PRs
 pub struct ActiveThread {
     pub root_id: String,
     pub subject: String,
@@ -69,7 +74,7 @@ pub fn in_window_messages<'a>(index: &'a EmailIndex, w: NaiveDate) -> Vec<&'a Em
     msgs
 }
 
-/// Result of a summarize-week preparation run (PR2 scope).
+/// Result of a summarize-week run.
 #[derive(Debug, Clone)]
 pub enum MaterializeResult {
     /// Week already had `.complete`; no work done.
@@ -77,11 +82,18 @@ pub enum MaterializeResult {
     /// Empty week stub written and marked complete.
     EmptyWeekComplete { week: NaiveDate },
     /// Non-empty week: layout ready, threads selected; no message files on disk.
-    /// Week left incomplete until agents run (later PRs).
+    /// Week left incomplete until agents run.
     WeekPrepared {
         week: NaiveDate,
         message_count: usize,
         thread_count: usize,
+    },
+    /// Agents ran: order + serial thread summaries (overview/complete still PR6).
+    AgentsFinished {
+        week: NaiveDate,
+        threads_ok: usize,
+        threads_failed: usize,
+        failed_thread_ids: Vec<String>,
     },
 }
 
@@ -187,12 +199,35 @@ fn read_week_headline(outputs_path: &Path, w: NaiveDate) -> Option<String> {
     None
 }
 
-/// Full CLI entry for `summarize-week` (PR2: prepare only).
+/// Options for LLM agents during summarize-week.
+pub struct AgentRunOpts {
+    pub client: Option<OpenAIClient>,
+    /// When set, used for both order and thread agents (tests).
+    pub order_inference: Option<InferenceCallback>,
+    pub thread_inference: Option<InferenceCallback>,
+    /// If true, skip LLM agents (prepare layout only).
+    pub prepare_only: bool,
+}
+
+impl Default for AgentRunOpts {
+    fn default() -> Self {
+        Self {
+            client: None,
+            order_inference: None,
+            thread_inference: None,
+            prepare_only: false,
+        }
+    }
+}
+
+/// Full CLI entry for `summarize-week`.
 pub async fn run_summarize_week(
     pool: &SqlitePool,
     outputs_path: &Path,
     week: Option<&str>,
     start_week: Option<&str>,
+    lore_base_url: &str,
+    opts: AgentRunOpts,
 ) -> Result<MaterializeResult> {
     if !outputs_path.exists() {
         fs::create_dir_all(outputs_path)
@@ -212,7 +247,131 @@ pub async fn run_summarize_week(
 
     info!("Loading email index for week ending {w}");
     let index = EmailIndex::load(pool).await?;
-    materialize_week(pool, &index, outputs_path, w).await
+    let prep = materialize_week(pool, &index, outputs_path, w).await?;
+    match &prep {
+        MaterializeResult::EmptyWeekComplete { .. }
+        | MaterializeResult::AlreadyComplete { .. } => return Ok(prep),
+        MaterializeResult::WeekPrepared { .. } => {}
+        MaterializeResult::AgentsFinished { .. } => return Ok(prep),
+    }
+
+    if opts.prepare_only {
+        return Ok(prep);
+    }
+
+    run_agents_for_week(
+        pool,
+        &index,
+        outputs_path,
+        w,
+        lore_base_url,
+        opts,
+    )
+    .await
+}
+
+/// Ordering + serial thread agents for a non-empty week (no overview yet).
+pub async fn run_agents_for_week(
+    pool: &SqlitePool,
+    index: &EmailIndex,
+    outputs_path: &Path,
+    week: NaiveDate,
+    lore_base_url: &str,
+    opts: AgentRunOpts,
+) -> Result<MaterializeResult> {
+    ensure_week_layout(outputs_path, week)?;
+    let active = select_active_threads(index, week);
+    if active.is_empty() {
+        bail!("run_agents_for_week called with no active threads");
+    }
+
+    let index = Arc::new(index.clone());
+    let ctx = ToolCtx::new(
+        pool.clone(),
+        index.clone(),
+        outputs_path.to_path_buf(),
+        week,
+        week_window(week),
+    )
+    .with_lore_base(lore_base_url);
+
+    let order = obtain_thread_order(
+        ctx.clone(),
+        week,
+        &active,
+        opts.client.clone(),
+        opts.order_inference.clone(),
+    )
+    .await
+    .context("obtain thread order")?;
+
+    // Map root -> ActiveThread
+    let by_root: BTreeMap<_, _> = active
+        .iter()
+        .map(|t| (t.root_id.clone(), t.clone()))
+        .collect();
+
+    let total = order.len();
+    let mut failed_thread_ids = Vec::new();
+    let mut threads_ok = 0usize;
+
+    for (i, root) in order.iter().enumerate() {
+        let Some(thread) = by_root.get(root) else {
+            warn!(%root, "ordered root missing from active set; skipping");
+            failed_thread_ids.push(root.clone());
+            continue;
+        };
+        // Skip if already written
+        if thread_markdown_path(outputs_path, week, root).is_file() {
+            threads_ok += 1;
+            continue;
+        }
+
+        let result = run_thread_agent(
+            ctx.clone(),
+            week,
+            thread,
+            index.as_ref(),
+            &order,
+            i + 1,
+            total,
+            opts.client.clone(),
+            opts.thread_inference.clone(),
+        )
+        .await;
+
+        match result {
+            Ok(_) => threads_ok += 1,
+            Err(e) => {
+                error!(root = %root, error = %e, "thread agent failed");
+                failed_thread_ids.push(root.clone());
+            }
+        }
+    }
+
+    let threads_failed = failed_thread_ids.len();
+    info!(
+        %week,
+        threads_ok,
+        threads_failed,
+        "thread agents finished (overview/.complete deferred to PR6)"
+    );
+
+    if threads_failed > 0 {
+        warn!(?failed_thread_ids, "failed_thread_ids");
+        // Non-zero exit for CLI: return Ok with failures and let caller check,
+        // or bail. Design: exit non-zero if any failure.
+        bail!(
+            "thread agents failed for {threads_failed} thread(s): {failed_thread_ids:?}"
+        );
+    }
+
+    Ok(MaterializeResult::AgentsFinished {
+        week,
+        threads_ok,
+        threads_failed,
+        failed_thread_ids,
+    })
 }
 
 /// Require `outputs_path` from config.
@@ -404,9 +563,19 @@ mod tests {
     async fn resolve_and_run_start_week_empty() {
         let pool = open_in_memory().await.unwrap();
         let out = temp_outputs();
-        let result = run_summarize_week(&pool, &out, None, Some("2026-07-20"))
-            .await
-            .unwrap();
+        let result = run_summarize_week(
+            &pool,
+            &out,
+            None,
+            Some("2026-07-20"),
+            "https://lore.kernel.org/linux-nfs/",
+            AgentRunOpts {
+                prepare_only: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, MaterializeResult::EmptyWeekComplete { .. }));
         assert!(complete_marker_path(&out, NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()).is_file());
         let _ = fs::remove_dir_all(&out);

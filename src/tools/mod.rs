@@ -2,14 +2,15 @@
 //!
 //! PR3: mail tools. PR4: outputs tools + related search. PR5 wraps these in `Tool::new`.
 
-mod get_email;
-mod glob_outputs;
-mod grep_emails;
-mod grep_outputs;
-mod list_thread_messages;
-mod paths;
-mod read_output_file;
-mod search_related_threads;
+pub mod get_email;
+pub mod glob_outputs;
+pub mod grep_emails;
+pub mod grep_outputs;
+pub mod list_thread_messages;
+pub mod paths;
+pub mod read_output_file;
+pub mod search_related_threads;
+pub mod submit;
 
 #[allow(unused_imports)] // re-exported for agents (PR5+)
 pub use get_email::{get_email, GetEmailArgs};
@@ -45,6 +46,7 @@ pub struct ToolCtx {
     pub index: Arc<EmailIndex>,
     /// Outputs root (prefer canonical absolute path).
     pub outputs_path: PathBuf,
+    #[allow(dead_code)] // reserved for agent prompts / future tools
     pub week_ending: NaiveDate,
     /// Half-open UTC window for the current week edition.
     pub week_window: (DateTime<Utc>, DateTime<Utc>),

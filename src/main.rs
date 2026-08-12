@@ -1,3 +1,4 @@
+mod agent;
 mod config;
 mod content_cleaner;
 mod db;
@@ -10,15 +11,17 @@ mod models;
 mod openai_client;
 mod outputs;
 mod summarize;
-#[allow(dead_code)] // pure handlers exercised in unit tests; agents in PR5+
 mod tools;
 mod week;
 
+use crate::agent::llm::client_from_config;
 use crate::config::Config;
 use crate::db::open_db;
 use crate::email_index::EmailIndex;
 use crate::git_handler::GitHandler;
-use crate::summarize::{require_outputs_path, run_summarize_week, MaterializeResult};
+use crate::summarize::{
+    require_outputs_path, run_summarize_week, AgentRunOpts, MaterializeResult,
+};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -46,12 +49,12 @@ enum Commands {
         /// Regular expression to search for in composed Subject + Body text.
         pattern: String,
     },
-    /// Prepare one week edition (empty-week stubs; non-empty selects active threads).
+    /// Produce one week edition: empty stubs, or order + serial thread summaries.
     ///
     /// Does **not** write per-message markdown. Cleaned bodies stay in the DB for
     /// inference; published summaries link messages to lore.kernel.org.
-    /// Empty weeks write a stub index + `.complete`. Non-empty weeks leave the
-    /// week incomplete until thread agents run (later PRs).
+    /// Empty weeks write a stub index + `.complete`. Non-empty weeks write
+    /// `thread/*.md` via LLM agents (overview + `.complete` in a later PR).
     SummarizeWeek {
         /// Bootstrap only when no complete weeks exist under outputs_path.
         #[arg(long)]
@@ -59,6 +62,9 @@ enum Commands {
         /// Explicit week end date (YYYY-MM-DD); wins over auto-resolve.
         #[arg(long)]
         week: Option<String>,
+        /// Skip LLM agents (layout / empty stub only).
+        #[arg(long, default_value_t = false)]
+        prepare_only: bool,
     },
 }
 
@@ -86,8 +92,18 @@ async fn main() -> Result<()> {
             let pool = open_db(&config.db_path, false).await?;
             grep_cmd::run_grep(&pool, &pattern).await?;
         }
-        Commands::SummarizeWeek { start_week, week } => {
-            summarize_week_cmd(config, start_week.as_deref(), week.as_deref()).await?;
+        Commands::SummarizeWeek {
+            start_week,
+            week,
+            prepare_only,
+        } => {
+            summarize_week_cmd(
+                config,
+                start_week.as_deref(),
+                week.as_deref(),
+                prepare_only,
+            )
+            .await?;
         }
     }
 
@@ -98,11 +114,31 @@ async fn summarize_week_cmd(
     config: Config,
     start_week: Option<&str>,
     week: Option<&str>,
+    prepare_only: bool,
 ) -> Result<()> {
     let outputs = require_outputs_path(&config.outputs_path)?;
     let pool = open_db(&config.db_path, false).await?;
 
-    let result = run_summarize_week(&pool, &outputs, week, start_week).await?;
+    let opts = AgentRunOpts {
+        client: if prepare_only {
+            None
+        } else {
+            Some(client_from_config(&config))
+        },
+        order_inference: None,
+        thread_inference: None,
+        prepare_only,
+    };
+
+    let result = run_summarize_week(
+        &pool,
+        &outputs,
+        week,
+        start_week,
+        &config.lore_base_url,
+        opts,
+    )
+    .await?;
     match result {
         MaterializeResult::AlreadyComplete { week } => {
             info!(%week, "already complete; nothing to do");
@@ -119,8 +155,21 @@ async fn summarize_week_cmd(
                 %week,
                 message_count,
                 thread_count,
-                lore_base = %config.lore_base_url,
-                "week prepared (no message files on disk); incomplete until agents run"
+                "week prepared only (--prepare-only); agents not run"
+            );
+        }
+        MaterializeResult::AgentsFinished {
+            week,
+            threads_ok,
+            threads_failed,
+            failed_thread_ids,
+        } => {
+            info!(
+                %week,
+                threads_ok,
+                threads_failed,
+                ?failed_thread_ids,
+                "thread summaries done; week still incomplete until overview (PR6)"
             );
         }
     }
