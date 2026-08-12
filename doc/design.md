@@ -4,7 +4,7 @@
 |---|---|
 | **Author** | TBD |
 | **Date** | 2026-08-10 |
-| **Status** | Approved draft (rev 4 — body-map keying contract) |
+| **Status** | Approved draft (rev 5 — serial ordered thread agents) |
 | **Workspace** | `/home/dan/vd/newnotes/workdirs/nfs-mailing-list-summary/new-code` |
 | **Location** | `doc/design.md` |
 | **Depends on** | `build-db` SQLite corpus; [da-harness](https://github.com/da-x/da-harness) `r/0.5` (`multi_tool`), pin git rev at implement time |
@@ -15,7 +15,7 @@
 
 This project already ingests a lore-style git mail archive into SQLite (`build-db`), indexes threads in memory (`EmailIndex`), and demos regex search (`grep`). Legacy sibling code (`../code/`) produced weekly journalistic summaries with one-shot LLM calls and Hugo publish — but dumped full thread bodies into prompts, had no multi-week memory, and did not expose discovery tools.
 
-This design turns `new-code` into a **weekly discussion summarizer**: for each completed calendar week, the host deterministically materializes raw message markdown under `outputs_path`, then runs **da-harness multi_tool agents** (one session per active thread, then one week-overview session). Agents explore mail and prior week outputs via tools, then submit markdown summaries through typed `submit_*` tools. Previous week directories are never rewritten. Multi-week threads are handled by reading prior `thread/<id>.md` files rather than re-dumping history into a single prompt.
+This design turns `new-code` into a **weekly discussion summarizer**: for each completed calendar week, the host deterministically materializes raw message markdown under `outputs_path`, then runs **da-harness multi_tool agents** in three stages: (1) an **ordering agent** that ranks the week’s discussions by dependency / reading order; (2) **one session per active thread**, executed **strictly serially** in that order; (3) a **week-overview** session. Agents explore mail and prior outputs via tools, then submit results through typed `submit_*` tools. Previous week directories are never rewritten. Multi-week threads are handled by reading prior `thread/<id>.md` files; same-week threads summarized earlier in the serial order are also readable by later sessions.
 
 Empty weeks still produce a completed stub edition so auto-advance never stalls. Thread failures continue (resume-friendly) but **never** mark a week complete or run overview until every expected thread file exists and overview succeeds.
 
@@ -84,12 +84,13 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 
 1. Add a CLI command that produces **exactly one completed week** of markdown under `config.outputs_path` (including empty weeks as stub editions).
 2. Use **da-harness multi_tool** agents with a documented tool catalog (mail + outputs + submit).
-3. Host writes **raw message files** deterministically from the DB; agents only produce **summaries**.
+3. Host writes **raw message files** deterministically from the DB; agents produce **order**, **thread summaries**, and **week overview** (not raw mail files).
 4. **Never rewrite** prior week outputs once `.complete` exists; agents may only read them.
 5. Support **multi-week threads** via host-injected prior paths + glob/read of `{outputs_path}/*/thread/<thread-id>.md`.
-6. Resume incomplete weeks; fail if the target week has not ended yet (UTC).
-7. Keep `build-db` / `meta` / `grep` working; reuse `EmailIndex` and cleaned bodies.
-8. Single-flight: exclusive lock so concurrent `summarize-week` runs do not race.
+6. Support **same-week dependencies** via an ordering agent + serial thread sessions that can read earlier same-week `thread/*.md` files.
+7. Resume incomplete weeks; fail if the target week has not ended yet (UTC).
+8. Keep `build-db` / `meta` / `grep` working; reuse `EmailIndex` and cleaned bodies.
+9. Single-flight: exclusive lock so concurrent `summarize-week` process runs do not race.
 
 ### Non-Goals
 
@@ -110,19 +111,19 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 | # | Decision | Rationale |
 |---|---|---|
 | KD1 | **Week window** (half-open UTC): `[W−6 00:00:00 UTC, W+1 00:00:00 UTC)`. Folder name `W` is any calendar end date (not forced to Sunday / ISO week). | Avoids inclusive end-of-day float/chrono awkwardness; clear unit tests at day boundaries; matches product “arbitrary end-date.” |
-| KD2 | **Agent granularity**: one multi_tool session **per active thread**, then one **week overview** agent (only if all expected thread files exist). Empty week: no agents (stub overview). | Caps context; parallelizable; failures isolated; overview sees condensed thread summaries not raw mail. |
-| KD3 | **Completion protocol**: host writes `messages/*.md` deterministically; agents finish via `submit_*` tools; **continue on thread failure**; never write root `index.md` or `W/.complete` until **all** expected `thread/*.md` exist **and** week overview succeeds; exit non-zero on any failure. Re-run only executes missing thread files + overview. **Do not run overview** if any expected thread file is missing. | Single consistent resume model; no hollow weeks; no premature “published” state. |
+| KD2 | **Agent granularity (ordered serial)**: (1) one **ordering** multi_tool session ranks all active threads by dependency / reading order; (2) one multi_tool session **per active thread**, run **strictly serially** in that order (never concurrent); (3) one **week overview** agent only if all expected thread files exist. Empty week: no agents (stub overview). | Dependencies between discussions (related subjects, patch series, “read A before B”) require a deliberate order; serial sessions let later agents read same-week summaries already written. Parallel thread agents are **out of scope**. |
+| KD3 | **Completion protocol**: host writes `messages/*.md` deterministically; ordering agent submits `SubmitThreadOrder` (or host reuses valid `.thread-order.json`); thread/week agents finish via `submit_*` tools; **continue on thread failure** (still serial); never write root `index.md` or `W/.complete` until **all** expected `thread/*.md` exist **and** week overview succeeds; exit non-zero on any failure. Re-run reuses order file when valid, executes only missing thread files + overview. **Do not run overview** if any expected thread file is missing. Ordering failure aborts before new thread sessions. | Single consistent resume model; no hollow weeks; no premature “published” state. |
 | KD4 | **ID policy**: `normalize_message_id` = trim whitespace (keep angle brackets as-is after trim). Every in-memory `EmailMeta` **must** retain both `message_id` (canonical normalized, all external use) and `message_id_raw` (exact SQLite PRIMARY KEY for body SQL). **Single keying contract for all of `EmailIndex`:** (1) external/agent/file ids = always normalized; (2) body `HashMap` keys from `load_all_bodies` = always **normalized** (so `compose_thread_text`’s `bodies.get(&msg.message_id)` works); (3) SQL `WHERE message_id = ?` = always `message_id_raw`. Lookups/tools/roots/front matter use normalized only. `file_stem_for_id` percent-encodes the normalized id, or `sha256` lowercase hex if encoded length > 200 (`sha2`). Collision: one map entry per normalized id; earliest-by-date wins; keep winner’s `message_id_raw`. **`build-db` does not rewrite historical PKs.** CLI `grep` needs no call-site changes beyond these internals. | Fixes leading-space corpus footgun without breaking SQL or grepping empty bodies. |
 | KD5 | **Messages in a week directory**: only messages whose `date` is in the half-open week window. Historical parents via tools / prior summaries, not bulk-copied. | Keeps week artifacts proportional to activity. |
-| KD6 | **Prior summaries**: host pre-globs and injects last **N=3** prior `*/thread/<stem>.md` paths into the thread user message; `GlobOutputs` still available for deeper history. Never rewrite prior week files. Continuity applies only to **new-layout** history (not `../infer`). | Multi-week continuity without flooding the prompt; agents know what to read first. |
+| KD6 | **Prior summaries**: host pre-globs and injects last **N=3** **cross-week** prior `*/thread/<stem>.md` paths into the thread user message. Additionally, for serial same-week work, host injects paths to **already-written same-week** `W/thread/<stem>.md` files that the ordering agent marked as prerequisites (or all same-week threads earlier in the order — see Step 6b). `GlobOutputs` / `ReadOutputFile` still available. Never rewrite prior week files. Continuity applies only to **new-layout** history (not `../infer`). | Multi-week + same-week dependency continuity without flooding the prompt. |
 | KD7 | **LLM client**: da-harness `OpenAIClient::with_config(LLMConfig { … })` from `config.openai`. Pin **git rev** (not floating branch only). Delete unused `openai_client.rs` in PR7. | Reproducible builds; typed tools + agent loop. |
 | KD8 | **Active thread set**: any thread with ≥1 message in the week window (root via normalized `thread_root_id`). Same thread-root rules as today; activity is calendar-window based (stricter/clearer than legacy rolling 7-day cutoff in `process_threads`). | Product week semantics. |
 | KD9 | **Week completeness gate**: if `Utc::now().date_naive() <= W`, fail. **UTC only** (no local-time folder naming). | Prevents incomplete-week summaries; timezone closed. |
-| KD10 | **Progress marker**: only `W/.complete` (empty file) for v1. No dual `state.json`. Written **last** after fsync of `W/index.md` and root `index.md`. Per-thread skip if `thread/<stem>.md` already exists. | Simplest resume; failed thread list lives in process logs (`failed_thread_ids`). |
+| KD10 | **Progress markers**: `W/.complete` (empty file) for published completion, written **last** after fsync of `W/index.md` and root `index.md`. Resume aids: `W/.thread-order.json` (ordering agent result) while incomplete; per-thread skip if `thread/<stem>.md` already exists. No dual `state.json`. | Simplest resume; order file avoids re-ranking on every partial re-run; failed thread list lives in process logs (`failed_thread_ids`). |
 | KD11 | **Empty week**: if zero messages in window → create `W/`, write stub `W/index.md` (“No mailing list activity in this week.”), write `.complete`, update root index, exit 0. No agents. Auto-advance continues next run. | Empty holiday/corpus-lag weeks must not stall `W_last+7` progression. |
 | KD12 | **Failure / overview gate**: continue after thread failures; collect `failed_thread_ids`; **never** run week overview unless `failed == 0` and every expected stem has a file; never `.complete` / root update otherwise; exit non-zero. | Prevents hollow overview and premature complete (Issue 25). |
 | KD13 | **Concurrent runs**: exclusive `flock` on `{outputs_path}/.summarize-week.lock`; second process exits non-zero immediately. | Cron re-entry safety. |
-| KD14 | **Session timeouts**: `tokio::time::timeout` **15 min** per thread agent, **20 min** for week agent; on timeout → treat as failure (drop incoming `tx`, cancel/await run). | Prevents hung cron on missing submit. |
+| KD14 | **Session timeouts**: `tokio::time::timeout` **10 min** for the ordering agent, **15 min** per thread agent, **20 min** for week agent; on timeout → treat as failure (drop incoming `tx`, cancel/await run). Ordering failure fails the run before any new thread sessions (unless a valid order file already exists for resume). | Prevents hung cron on missing submit. |
 | KD15 | **CLI week resolution**: “Complete week” = dir containing `.complete`. **Incomplete dirs do not count as +7 anchors.** Priority: (1) `--week` wins; (2) if any incomplete week dir exists → **resume it** (exactly one incomplete allowed; if multiple incomplete → error; ignore `--start-week` with warning); (3) if ≥1 complete and no incomplete → auto `W_last_complete + 7`; (4) if no complete and no incomplete → require `--start-week`. If complete weeks exist, `--start-week` that disagrees with auto chain → error. No `--force` in v1 (complete + `--week` → exit 0 no-op). See matrix. | Prevents abandoned incomplete dirs and ambiguous bootstrap. |
 | KD16 | **Overview re-run**: if `.complete` absent and all expected thread files present → **always** re-run week overview and may rewrite `W/index.md`; write root index then `.complete` last (fsync). | Partial overview failure is recoverable. |
 | KD17 | **Week agent tools**: `GlobOutputs`, `GrepOutputs`, `ReadOutputFile`, `SubmitWeekOverview` only (no mail tools). Host provides the full thread list + paths in the user message. | Overview should not re-research mail; cheaper and focused. |
@@ -132,7 +133,7 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 | KD21 | **Submit payload channel**: `Mutex<Option<Payload>>` or `mpsc`; double-submit returns tool error `"already submitted"`. | Aligns with harness stop pattern; no oneshot double-fire panic. |
 | KD22 | **Path sandbox**: reject absolute paths and `..` components; canonicalize `outputs_path` once at start; existing files: canonicalize + prefix check; missing → clear tool error (do not require canonicalize of missing paths). | Unix `canonicalize` existence footgun. |
 | KD23 | **Thread-agent focus**: tools default to `focus_thread_root` unless the agent explicitly passes another `thread_root_id`; week agent leaves focus unset. | Cost control. |
-| KD24 | **Concurrency default**: `1` parallel thread agent for v1 (CLI `--concurrency` reserved; tuning later). | Rate-limit safety. |
+| KD24 | **Serial only**: thread agents **never** run in parallel. No `--concurrency` flag. Within a single agent session, `parallel_tools(true)` may still run **read-only tool calls** concurrently; that is tool-level parallelism, not multi-thread-agent concurrency. | Product requires dependency-aware ordering and same-week summary handoff; parallel agents would race that model. |
 
 ---
 
@@ -157,7 +158,8 @@ flowchart TB
     EMP{Empty week?}
     STUB[Stub index + .complete + root]
     WM[Write messages/*.md]
-    TA[Per-thread multi_tool agents]
+    ORD[Ordering multi_tool agent]
+    TA[Serial per-thread multi_tool sessions]
     GATE{All thread files OK?}
     WA[Week overview multi_tool agent]
     ROOT[Root index.md + fsync + .complete]
@@ -171,9 +173,10 @@ flowchart TB
 
   CFG --> LOCK --> RW --> VAL --> IDX --> SEL --> EMP
   EMP -->|yes| STUB
-  EMP -->|no| WM --> TA --> GATE
+  EMP -->|no| WM --> ORD --> TA --> GATE
   GATE -->|no| FAIL
   GATE -->|yes| WA --> ROOT
+  ORD --> TOOLS
   TA --> TOOLS
   WA --> TOOLS
   TOOLS --> DB
@@ -193,6 +196,7 @@ For week ending **2026-07-20** (`W = 2026-07-20`):
   index.md                          # root catalog; rewritten only when a week completes
   2026-07-20/
     .complete                       # empty marker; written LAST after fsync
+    .thread-order.json              # ordered root_ids from ordering agent (resume)
     index.md                        # week overview + thread list with links
     thread/
       <file_stem_for_id(root)>.md   # per-thread summary for this week
@@ -425,9 +429,6 @@ SummarizeWeek {
     /// Explicit week end date; wins over auto-resolve (see matrix).
     #[arg(long)]
     week: Option<String>,
-    /// Max concurrent thread agents (default 1).
-    #[arg(long, default_value_t = 1)]
-    concurrency: usize,
 }
 ```
 
@@ -469,8 +470,14 @@ sequenceDiagram
     Host-->>CLI: exit 0
   end
   Host->>FS: write messages/*.md
-  loop each expected thread (skip if thread md exists)
-    Host->>Agent: session with 15m timeout
+  alt no valid .thread-order.json
+    Host->>Agent: ordering session 10m timeout
+    Agent->>LLM: research deps / related subjects
+    Agent->>Host: SubmitThreadOrder
+    Host->>FS: write .thread-order.json
+  end
+  loop each root_id in order SERIALLY (skip if thread md exists)
+    Host->>Agent: thread session 15m timeout
     Agent->>LLM: tool loop
     Agent->>Host: SubmitThreadSummary or fail/timeout
     Host->>FS: write thread/*.md on success
@@ -554,17 +561,63 @@ Body: `load_body(pool, index, &msg.message_id)` → resolves to `WHERE message_i
 
 Idempotent overwrite OK. Body load failures: log + count; v1 fail the run if any body required for an in-window message cannot be loaded (data integrity).
 
-#### Step 6: Per-thread agents (KD3, KD12, KD14)
+#### Step 6a: Ordering agent (KD2, KD14)
 
-Expected set = keys of `active`.
+**Goal:** produce a total order over the expected thread set so dependent discussions run later and can read earlier same-week summaries.
 
-For each `root_id`:
+Expected set = keys of `active` (normalized root ids).
+
+**Resume:** if `{W}/.thread-order.json` exists, is valid JSON, and its `ordered_root_ids` is a **permutation of the current expected set** (same multiset of ids), **reuse it** and skip the ordering agent. If the expected set changed (DB grew mid-resume) or the file is corrupt → delete/ignore and re-run ordering.
+
+**Ordering agent input (host-built user message):** catalog of every active thread for the week:
+
+```text
+Week ending: 2026-07-20
+For each thread (unordered catalog):
+  - root_id (normalized)
+  - subject
+  - message_count_this_week
+  - first_date / last_date in window
+  - sample from-addrs (optional, capped)
+Order these discussions for serial summarization. Prefer: foundations /
+parent series before follow-ups; “depends on” / “related to” subjects after
+their prerequisites; independent topics in any stable preference (e.g. by
+last activity descending is fine).
+Call SubmitThreadOrder exactly once with every root_id exactly once.
+```
+
+**Ordering agent tools:** `GrepEmails`, `SearchRelatedThreads`, `ListThreadMessages`, `GrepOutputs`, `GlobOutputs`, `ReadOutputFile`, `SubmitThreadOrder`. No `SubmitThreadSummary` / `SubmitWeekOverview`. Focus unset. Timeout **10 minutes**.
+
+**`SubmitThreadOrder` payload:**
+
+```json
+{
+  "ordered_root_ids": ["<id1>", "<id2>", "..."],
+  "notes": "optional short rationale for the host logs only"
+}
+```
+
+**Host validation after submit:**
+
+1. Normalize every id in `ordered_root_ids`.
+2. Require **exactly the expected set**: no missing, no extras, no duplicates.
+3. On validation failure → treat as ordering failure: **do not** write `.thread-order.json`, **do not** start thread agents, exit non-zero (or re-prompt once — v1: fail).
+4. On success → write `{W}/.thread-order.json` (pretty JSON including `week_ending`, `ordered_root_ids`, optional `notes`). This file is **not** part of the published markdown catalog; it is resume state. It may be rewritten only while `.complete` is absent.
+
+**Fallback if ordering is unavailable:** none in v1 — ordering is mandatory for non-empty weeks (product: dependency-aware order). Offline tests may inject a fixed order via `inference_callback` without a live model.
+
+#### Step 6b: Serial per-thread agents (KD2, KD3, KD6, KD12, KD14)
+
+Process **strictly one thread session at a time**, in `ordered_root_ids` order. **No** concurrent thread agents.
+
+For each `root_id` in order:
 
 1. If `{W}/thread/{file_stem_for_id(root_id)}.md` exists → **skip** (resume).
-2. Host globs prior summaries; injects last **N=3** paths into user message.
-3. Run multi_tool session with **15 minute** timeout (see Session lifecycle).
-4. On successful submit → write thread file (host wraps agent body + host-built message list).
-5. On failure/timeout → **do not** write thread file; push `root_id` to `failed_thread_ids`; **continue** to next thread.
+2. Host globs **cross-week** prior summaries; injects last **N=3** paths into the user message (KD6).
+3. Host also injects **same-week predecessors already on disk**: every `W/thread/<stem>.md` for roots **earlier in the order** that already exist (from this run or a previous partial run). Prefer listing those the ordering notes marked as related when notes exist; otherwise list all earlier same-week files (cap e.g. 10 paths with a note that more exist via GlobOutputs).
+4. Run multi_tool session with **15 minute** timeout (see Session lifecycle). Fresh session per thread (no shared conversation history across threads).
+5. On successful submit → write thread file (host wraps agent body + host-built message list). Later sessions may `ReadOutputFile` this path.
+6. On failure/timeout → **do not** write thread file; push `root_id` to `failed_thread_ids`; **continue** to the next root in order (still serial).
 
 After the loop:
 
@@ -755,8 +808,9 @@ src/
     search_related_threads.rs
     submit.rs          # submit handlers (Mutex slot)
   agent/
-    mod.rs             # session runner with timeout
-    thread_agent.rs
+    mod.rs             # session runner with timeout (serial only)
+    order_agent.rs     # ranking / dependency order for the week
+    thread_agent.rs    # one session per thread, host runs in order
     week_agent.rs
   grep_cmd.rs          # keep CLI grep
   # openai_client.rs   # delete in PR7 when unused
@@ -772,7 +826,7 @@ pub struct ToolCtx {
     pub outputs_path: PathBuf,
     pub week_ending: NaiveDate,
     pub week_window: (DateTime<Utc>, DateTime<Utc>), // half-open
-    /// Thread agent: Some(normalized root). Week agent: None.
+    /// Thread agent: Some(normalized root). Ordering / week agent: None.
     pub focus_thread_root: Option<String>,
 }
 ```
@@ -787,11 +841,13 @@ All tools return `Result<String>` for the model. Tool arg message ids are **norm
 | `GrepOutputs` | `pattern`, `glob?`, `max_matches?` | Regex under outputs | Sandboxed paths; relative results. |
 | `GlobOutputs` | `pattern` | Glob under outputs | e.g. `*/thread/<stem>.md`. |
 | `ReadOutputFile` | `path` | Read relative path | See path sandbox algorithm below. Cap 256 KiB. |
-| `SearchRelatedThreads` | `subject`, `limit?` | Subject-normalized related roots | Strip `re:`/`fwd:`/`[patch*]`; token overlap. Return normalized root_id + subject + last activity. |
+| `SearchRelatedThreads` | `subject`, `limit?` | Subject-normalized related roots | Strip `re:`/`fwd:`/`[patch*]`; token overlap. Return normalized root_id + subject + last activity. Prefer scoping to **this week’s active set** when called from the ordering agent (host may pass allowed roots in ToolCtx). |
+| `SubmitThreadOrder` | `ordered_root_ids: Vec<String>`, `notes?` | Finish ordering agent | Host validates permutation of expected set; writes `.thread-order.json`. Double-submit error. |
 | `SubmitThreadSummary` | `title`, `markdown_body`, `key_message_ids` | Finish thread agent | Non-empty body; Mutex slot; double-submit error. |
 | `SubmitWeekOverview` | `headline`, `markdown_body` | Finish week agent | `headline` used for root index (KD18). |
 
-**Thread agent tools:** all except `SubmitWeekOverview`.  
+**Ordering agent tools:** `GrepEmails`, `SearchRelatedThreads`, `ListThreadMessages`, `GrepOutputs`, `GlobOutputs`, `ReadOutputFile`, `SubmitThreadOrder` (no focus; no thread/week submit).  
+**Thread agent tools:** all except `SubmitThreadOrder` / `SubmitWeekOverview`.  
 **Week agent tools:** `GrepOutputs`, `GlobOutputs`, `ReadOutputFile`, `SubmitWeekOverview` only (KD17).
 
 #### Path sandbox algorithm (KD22)
@@ -817,12 +873,20 @@ Tests: `../`, absolute `/etc/passwd`, symlink escape if feasible, missing file c
 
 ### Agent prompts (contract)
 
+**Ordering system prompt (essence):**
+
+- You are planning work for a serial weekly summarizer.
+- Given the catalog of discussions active this week, decide the **order** in which they should be summarized.
+- Prefer: foundational patches / parent series before follow-ups; discussions that other threads cite or continue before dependents; independent topics last or by last activity.
+- Use tools to check subjects, related roots, and prior-week outputs if helpful — do **not** write summaries.
+- Call `SubmitThreadOrder` once with **every** catalog `root_id` exactly once (a permutation).
+
 **Thread system prompt (essence):**
 
 - Technical journalist for Linux NFS (tone ~ legacy / `../infer`).
-- Scope: this week’s developments in the focused thread; use tools; read host-listed prior summaries first.
+- Scope: this week’s developments in the focused thread; use tools; read host-listed prior summaries first (cross-week and same-week predecessors).
 - Use Message-IDs **exactly as returned** by `ListThreadMessages` / `GetEmail` (already normalized).
-- Cite only with **relative markdown links** to `../messages/<file_stem>.md`.
+- Cite only with **relative markdown links** to `../messages/<file_stem>.md` and same-week `../thread/<stem>.md` when referring to other discussions already summarized this week.
 - Bridge prior weeks briefly; focus on new content.
 - Call `SubmitThreadSummary` exactly once when done.
 
@@ -833,11 +897,14 @@ Week ending: 2026-07-20
 Window (UTC half-open): [2026-07-14T00:00:00Z, 2026-07-21T00:00:00Z)
 Thread root_id (normalized): <...>
 Subject: ...
+Position in week order: 3 of 45
 Messages this week (N):
   - date | from | message_id | file_stem | subject
-Prior summaries (most recent first, up to 3) — ReadOutputFile these:
+Cross-week prior summaries (most recent first, up to 3) — ReadOutputFile these:
   - 2026-07-13/thread/<stem>.md
   - 2026-07-06/thread/<stem>.md
+Same-week predecessors already summarized (read if relevant):
+  - thread/<other-stem>.md  (relative to week dir; or 2026-07-20/thread/...)
 Optional deeper history: GlobOutputs "*/thread/<stem>.md"
 Write the weekly summary, then SubmitThreadSummary.
 ```
@@ -846,20 +913,24 @@ Write the weekly summary, then SubmitThreadSummary.
 
 - Editor role; front-page overview; critical bugs / NFS client focus / trends.
 - Read listed `thread/*.md` via `ReadOutputFile` as needed; link with relative paths.
+- Host may provide threads in the **ordering agent’s order** for TOC consistency.
 - Call `SubmitWeekOverview` once with `headline` + body.
 
-### Concurrency & performance
+### Execution model & performance
 
 | Parameter | Expected / default | Notes |
 |---|---|---|
 | Threads / week | ~20–50 | From `../infer` samples |
 | Messages / week | ~200–400 | Sample week ~307 |
+| Thread agent concurrency | **1 (serial)** | KD2 / KD24 — never parallel |
+| Ordering agent timeout | 10 min | KD14 |
 | Thread agent timeout | 15 min | KD14 |
 | Week agent timeout | 20 min | KD14 |
-| Default `--concurrency` | 1 | KD24 |
+| Wall-clock / week (rough) | tens of minutes–hours | Serial × ~45 threads; not optimized for speed |
 | SQLite pool | max 5 | Read-only on summarize |
 | GrepEmails body scan cap | 200 | KD20 |
-| Prior summaries injected | 3 | KD6 |
+| Prior summaries injected | 3 cross-week + same-week predecessors | KD6 |
+| Tool-level parallel_tools | true | Concurrent **tools within one session** only |
 
 ### Expose `thread_root_id` + index helpers
 
@@ -911,7 +982,7 @@ impl EmailIndex {
 | Before | After |
 |---|---|
 | `build-db` / `meta` / `grep` | unchanged |
-| — | `summarize-week [--start-week YYYY-MM-DD] [--week YYYY-MM-DD] [--concurrency N]` |
+| — | `summarize-week [--start-week YYYY-MM-DD] [--week YYYY-MM-DD]` |
 
 Exit codes:
 
@@ -937,8 +1008,9 @@ api_key = "..."
 ### Rust helpers (crate-internal)
 
 - `ids::{normalize_message_id, file_stem_for_id, percent_encode_id, sha256_hex_lower}` (+ `sha2` dep)
-- `week::{resolve_week, week_window, assert_week_ended, write_root_index, write_complete_marker}`
+- `week::{resolve_week, week_window, assert_week_ended, write_root_index, write_complete_marker, load_or_validate_thread_order}`
 - `email_index::{thread_root_id, EmailMeta::{message_id, message_id_raw}, load_body via raw PK}`
+- `agent::run_session` (serial host orchestration only; no fan-out of thread agents)
 
 ### Removed / deprecated
 
@@ -969,9 +1041,10 @@ Optional later: migrate PKs to trimmed form in `build-db` — out of scope; woul
 | Artifact | Writer | Mutable? |
 |---|---|---|
 | `W/messages/*.md` | Host | Overwrite OK any re-run of W (deterministic) |
+| `W/.thread-order.json` | Host after `SubmitThreadOrder` | Written once per incomplete week; reuse on resume if still a valid permutation of expected set; may delete to force re-order while `.complete` absent |
 | `W/thread/*.md` | Host after submit | **No rewrite once present** (resume skips); absent on failure |
 | `W/index.md` | Host after overview/stub | Rewritable while `.complete` **absent** |
-| `W/.complete` | Host last | Presence ⇒ week immutable for v1 |
+| `W/.complete` | Host last | Presence ⇒ week immutable for v1 (order file may remain as historical) |
 | `index.md` (root) | Host | Regenerated when a week completes |
 | `.summarize-week.lock` | Host | Runtime lock only |
 
@@ -993,7 +1066,17 @@ Empty `outputs_path` requires `--start-week`. `../infer/` not imported.
 
 ### A3. Whole-week single agent
 
-**Rejected** — context/cost/resume pain (KD2).
+**Rejected** — context/cost/resume pain (KD2). Ordering + many short thread sessions is preferred.
+
+### A3b. Parallel per-thread agents (no ordering)
+
+**Approach:** run N thread sessions concurrently; host picks order by last activity.
+
+| Pros | Cons |
+|---|---|
+| Lower wall-clock time | Cannot honor cross-thread dependencies; same-week summary handoff races; product wants deliberate order |
+
+**Rejected** (KD2 / KD24). Tool-level `parallel_tools` inside one session remains allowed.
 
 ### A4. Subject-slug filenames (legacy infer)
 
@@ -1025,7 +1108,7 @@ Empty `outputs_path` requires `--start-week`. `../infer/` not imported.
 
 | Pros | Cons |
 |---|---|
-| Cheaper | Product wants journalistic overview quality; second agent is KD2 |
+| Cheaper | Product wants journalistic overview quality; overview agent remains after ordered serial threads (KD2) |
 
 **Deferred** — not v1; could be a future flag.
 
@@ -1048,8 +1131,9 @@ Empty `outputs_path` requires `--start-week`. `../infer/` not imported.
 ## Observability
 
 1. **tracing** INFO: lock acquired, week resolved, empty-week stub, thread start/end/skip/fail/timeout, overview start/end, files written, `.complete`.
-2. On non-zero exit: log structured field **`failed_thread_ids=[...]`** (and reason per id: timeout, agent error, no submit).
-3. **usage_callback**: accumulate tokens per thread + week; log totals.
+2. On non-zero exit: log structured field **`failed_thread_ids=[...]`** (and reason per id: timeout, agent error, no submit). Log ordering failures distinctly (`ordering_failed=true`).
+3. **usage_callback**: accumulate tokens for order + each thread + week; log totals.
+4. Log the final `ordered_root_ids` (and optional `notes`) at info when ordering completes.
 4. **indicatif** progress: threads completed / total.
 5. Ops: non-zero cron exit; missing `.complete` after schedule.
 
@@ -1080,6 +1164,8 @@ Log-oriented metrics (no separate backend required for v1):
 | Concurrent cron | High | flock KD13 |
 | ID whitespace misses | High | normalize everywhere KD4 |
 | Grep thrash on 143k mails | Medium | focus defaults + body scan cap KD20 |
+| Serial wall-clock (45×15m worst case) | Medium | Timeouts are caps not expected runtime; ops may re-run partial weeks; no parallel agents by design |
+| Bad ordering (deps inverted) | Medium | Ordering agent tools + validation; operator may delete `.thread-order.json` and re-run while incomplete |
 | Long Message-ID paths | Low | lowercase sha256 stem if encode len > 200 (`sha2`) |
 | Normalized id used as SQL PK | High | mandatory `message_id_raw` for all body queries (KD4) |
 | Body map keyed raw after dual-ID | High | `load_all_bodies` keys **normalized**; `compose_thread_text` uses `msg.message_id`; PR1 grep regression test |
@@ -1112,6 +1198,9 @@ Log-oriented metrics (no separate backend required for v1):
 ### Failure / resume tests
 
 - Mock agents: first thread fails, second succeeds → no `.complete`, no overview call, exit non-zero, `failed_thread_ids` logged.
+- Ordering: `SubmitThreadOrder` missing/extra/duplicate ids → fail before any thread write; valid order persists to `.thread-order.json`.
+- Serial host: thread sessions invoked one-after-another in order file sequence; later session user prompt includes earlier same-week `thread/*.md` paths.
+- Resume: existing `.thread-order.json` matching expected set skips ordering agent; existing `thread/*.md` skipped while still walking full order.
 - Re-run: failed thread runs again; successful thread file skipped; overview only when all present.
 - Overview fails after all threads OK → re-run re-invokes overview, may rewrite `W/index.md`, then `.complete`.
 
@@ -1138,12 +1227,13 @@ Log-oriented metrics (no separate backend required for v1):
 
 ## Open Questions
 
-1. **Concurrency &gt; 1**: default remains 1 (KD24). When to raise depends on API rate limits — leave as ops tuning via `--concurrency`.
+1. ~~Parallel thread agents / `--concurrency`~~ → **Resolved KD2/KD24 (serial only; ordering agent first).**
 2. ~~Fail-fast vs continue~~ → **Resolved KD3/KD12.**
 3. ~~Week agent mail tools~~ → **Resolved KD17 (outputs only).**
 4. ~~Headline source~~ → **Resolved KD18 (`SubmitWeekOverview.headline`).**
 5. ~~Timezone~~ → **Resolved KD9 (UTC only).**
 6. **Delete `openai_client.rs`**: in PR7 only when nothing references it (after PR5/PR6 land).
+7. **Re-order on resume when only some threads failed**: v1 reuses `.thread-order.json` if it still matches the expected set (KD10 / Step 6a). Whether operators may delete that file to force re-ranking is ops practice (document in README).
 
 ---
 
@@ -1193,34 +1283,36 @@ Incremental, each PR independently reviewable and mergeable.
 - **Dependencies:** PR1 paths, PR3 ToolCtx patterns
 - **Description:** KD22 sandbox tests (`..`, absolute, missing); subject normalization tests.
 
-### PR5 — da-harness pin + thread agent session + submit slot + timeout
+### PR5 — da-harness pin + ordering agent + thread agent session + submit slots + timeouts
 
-- **Title:** `feat: multi_tool thread agent with submit slot and 15m timeout`
-- **Files/components:** `Cargo.toml` (**pin `rev=`**), `src/agent/thread_agent.rs`, `src/tools/submit.rs`, `src/agent/mod.rs` (session runner)
+- **Title:** `feat: multi_tool order + thread agents (serial sessions, submit slots, timeouts)`
+- **Files/components:** `Cargo.toml` (**pin `rev=`**), `src/agent/{mod,order_agent,thread_agent}.rs`, `src/tools/submit.rs` (`SubmitThreadOrder`, `SubmitThreadSummary`), session runner
 - **Dependencies:** PR2, PR3, PR4
-- **Description:** Wrap pure handlers in `Tool::new`; Mutex submit slot; double-submit error; session lifecycle drop-tx; offline `inference_callback` tests. Live test `#[ignore]`. No week overview yet.
+- **Description:** Wrap pure handlers in `Tool::new`; Mutex submit slots; double-submit error; session lifecycle drop-tx; offline `inference_callback` tests for ordering (permutation validation) and one thread session. Live test `#[ignore]`. Host helper: write/read `.thread-order.json`. **No** parallel thread runner. No week overview yet.
 
-### PR6 — Full week pipeline: flock, failure policy, overview gate, empty week, root index
+### PR6 — Full week pipeline: flock, serial ordered loop, failure policy, overview, empty week
 
-- **Title:** `feat: summarize-week pipeline with flock, failure policy, overview gate, empty week, .complete`
+- **Title:** `feat: summarize-week pipeline with ordered serial threads, flock, overview, .complete`
 - **Files/components:** `src/agent/week_agent.rs`, `src/week.rs`, `src/main.rs` (`SummarizeWeek` end-to-end), **exclusive flock** on `{outputs_path}/.summarize-week.lock`
 - **Dependencies:** PR5
 - **Description / acceptance criteria (cron-safe when this merges):**
   - **KD13 flock required**: non-blocking exclusive lock at start; second process exits non-zero (test or documented manual check).
   - Empty week → stub + `.complete` + root update + exit 0 (tests).
+  - Ordering agent (or reuse valid `.thread-order.json`) then **serial** thread sessions in that order; same-week predecessor injection.
   - Continue on thread failure; **no overview** if any expected thread missing; no `.complete`; exit non-zero; log `failed_thread_ids`.
-  - Re-run only missing threads; always re-run overview when `.complete` absent and all threads present; `.complete` last after fsync.
-  - Week agent 20m timeout; outputs-only tools; headline → root index.
+  - Re-run only missing threads (same order file); always re-run overview when `.complete` absent and all threads present; `.complete` last after fsync.
+  - Week agent 20m timeout; outputs-only tools; headline → root index; TOC may follow order file.
   - Full `--week` / incomplete-first / `--start-week` matrix tested.
   - `assert_week_ended` enforced.
+  - Assert **no** concurrent thread-agent tasks in the host (code review / structure).
 
-### PR7 — Concurrency flag, metrics, docs, delete dead code
+### PR7 — Metrics, docs, delete dead code
 
-- **Title:** `chore: summarize-week concurrency, metrics, and design docs`
-- **Files/components:** `--concurrency`, usage aggregation, `doc/design.md` (this document), README CLI, remove `openai_client.rs` if unused
+- **Title:** `chore: summarize-week metrics and docs cleanup`
+- **Files/components:** usage aggregation, README CLI, remove `openai_client.rs` if unused; design already at `doc/design.md`
 - **Dependencies:** PR6
-- **Description:** KD24 concurrency wiring; observability fields; copy design to `doc/design.md`. **Lock already shipped in PR6** — this PR is hardening/docs only, not a gate for cron safety.
+- **Description:** Observability fields (`failed_thread_ids`, tokens, order notes); docs. **No concurrency flag.** Lock already shipped in PR6.
 
 ---
 
-*End of design document (rev 4).*
+*End of design document (rev 5 — serial ordered thread agents).*
