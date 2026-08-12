@@ -3,8 +3,14 @@ mod content_cleaner;
 mod email_index;
 mod git_handler;
 mod grep_cmd;
+mod ids;
 mod models;
 mod openai_client;
+// Path helpers and week resolution used by summarize-week (later PRs).
+#[allow(dead_code)]
+mod outputs;
+#[allow(dead_code)]
+mod week;
 
 use crate::config::Config;
 use crate::email_index::EmailIndex;
