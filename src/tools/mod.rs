@@ -1,32 +1,49 @@
 //! Pure tool handlers for the summarizer agents (no da-harness yet).
 //!
-//! PR3: mail tools. PR4+: outputs tools / submit. PR5 wraps these in `Tool::new`.
+//! PR3: mail tools. PR4: outputs tools + related search. PR5 wraps these in `Tool::new`.
 
 mod get_email;
+mod glob_outputs;
 mod grep_emails;
+mod grep_outputs;
 mod list_thread_messages;
+mod paths;
+mod read_output_file;
+mod search_related_threads;
 
-#[allow(unused_imports)] // re-exported for agents (PR5+) and external tests
+#[allow(unused_imports)] // re-exported for agents (PR5+)
 pub use get_email::{get_email, GetEmailArgs};
+#[allow(unused_imports)]
+pub use glob_outputs::{glob_outputs, GlobOutputsArgs};
 #[allow(unused_imports)]
 pub use grep_emails::{grep_emails, GrepEmailsArgs};
 #[allow(unused_imports)]
+pub use grep_outputs::{grep_outputs, GrepOutputsArgs};
+#[allow(unused_imports)]
 pub use list_thread_messages::{list_thread_messages, ListThreadMessagesArgs};
+#[allow(unused_imports)]
+pub use paths::{path_glob_match, resolve_output_path};
+#[allow(unused_imports)]
+pub use read_output_file::{read_output_file, ReadOutputFileArgs};
+#[allow(unused_imports)]
+pub use search_related_threads::{
+    normalize_subject, search_related_threads, subject_tokens, SearchRelatedThreadsArgs,
+};
 
 use crate::email_index::EmailIndex;
 use crate::lore::DEFAULT_LORE_BASE;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Shared context for pure tool handlers.
 #[derive(Clone)]
-#[allow(dead_code)] // outputs_path / week_ending used by PR4+ and agents
 pub struct ToolCtx {
     pub pool: SqlitePool,
     pub index: Arc<EmailIndex>,
-    /// Outputs root (absolute preferred). Unused by mail tools; required for PR4+.
+    /// Outputs root (prefer canonical absolute path).
     pub outputs_path: PathBuf,
     pub week_ending: NaiveDate,
     /// Half-open UTC window for the current week edition.
@@ -35,6 +52,8 @@ pub struct ToolCtx {
     pub focus_thread_root: Option<String>,
     /// Lore archive base for message links in tool output.
     pub lore_base_url: String,
+    /// When set (e.g. ordering agent), `SearchRelatedThreads` only considers these roots.
+    pub allowed_thread_roots: Option<HashSet<String>>,
 }
 
 impl ToolCtx {
@@ -45,6 +64,11 @@ impl ToolCtx {
         week_ending: NaiveDate,
         week_window: (DateTime<Utc>, DateTime<Utc>),
     ) -> Self {
+        let outputs_path = if outputs_path.exists() {
+            outputs_path.canonicalize().unwrap_or(outputs_path)
+        } else {
+            outputs_path
+        };
         Self {
             pool,
             index,
@@ -53,6 +77,7 @@ impl ToolCtx {
             week_window,
             focus_thread_root: None,
             lore_base_url: DEFAULT_LORE_BASE.to_string(),
+            allowed_thread_roots: None,
         }
     }
 
@@ -63,6 +88,11 @@ impl ToolCtx {
 
     pub fn with_lore_base(mut self, lore_base_url: impl Into<String>) -> Self {
         self.lore_base_url = lore_base_url.into();
+        self
+    }
+
+    pub fn with_allowed_roots(mut self, roots: Option<HashSet<String>>) -> Self {
+        self.allowed_thread_roots = roots;
         self
     }
 }
