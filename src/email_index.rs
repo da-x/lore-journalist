@@ -200,7 +200,6 @@ impl EmailIndex {
     /// Load and zstd-decompress the body for a message.
     ///
     /// Accepts raw or normalized id; always binds **`message_id_raw`** in SQL.
-    #[allow(dead_code)]
     pub async fn load_body(&self, pool: &SqlitePool, message_id: &str) -> Result<String> {
         let meta = self.get(message_id).with_context(|| {
             format!(

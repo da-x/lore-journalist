@@ -10,6 +10,8 @@ mod models;
 mod openai_client;
 mod outputs;
 mod summarize;
+#[allow(dead_code)] // pure handlers exercised in unit tests; agents in PR5+
+mod tools;
 mod week;
 
 use crate::config::Config;

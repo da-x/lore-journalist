@@ -52,3 +52,36 @@ pub async fn open_in_memory() -> Result<SqlitePool> {
     run_migrations(&pool).await?;
     Ok(pool)
 }
+
+/// Insert a fixture email (compile-time checked query). Tests only.
+#[cfg(test)]
+pub async fn insert_test_email(
+    pool: &SqlitePool,
+    message_id: &str,
+    subject: &str,
+    from_addr: &str,
+    date: &str,
+    body: &str,
+    in_reply_to: Option<&str>,
+    references: &str,
+) -> Result<()> {
+    let compressed = zstd::encode_all(body.as_bytes(), 3).context("zstd compress")?;
+    sqlx::query!(
+        r#"
+            INSERT INTO emails
+                (message_id, subject, from_addr, date, body, in_reply_to, "references")
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        message_id,
+        subject,
+        from_addr,
+        date,
+        compressed,
+        in_reply_to,
+        references,
+    )
+    .execute(pool)
+    .await
+    .context("insert_test_email")?;
+    Ok(())
+}
