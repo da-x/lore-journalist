@@ -29,4 +29,5 @@ sha2 = "0.10"
 da-harness = { git = "https://github.com/da-x/da-harness", rev = "1f866f7224d51bc99d3ad5a04458cd3f46d10c3e" }
 schemars = "0.8"
 futures = "0.3"
+fs2 = "0.4"
 

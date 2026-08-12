@@ -6,6 +6,7 @@ mod email_index;
 mod git_handler;
 mod grep_cmd;
 mod ids;
+mod lock;
 mod lore;
 mod models;
 mod openai_client;
@@ -49,12 +50,10 @@ enum Commands {
         /// Regular expression to search for in composed Subject + Body text.
         pattern: String,
     },
-    /// Produce one week edition: empty stubs, or order + serial thread summaries.
+    /// Produce one week edition end-to-end (lock, order, threads, overview, `.complete`).
     ///
     /// Does **not** write per-message markdown. Cleaned bodies stay in the DB for
     /// inference; published summaries link messages to lore.kernel.org.
-    /// Empty weeks write a stub index + `.complete`. Non-empty weeks write
-    /// `thread/*.md` via LLM agents (overview + `.complete` in a later PR).
     SummarizeWeek {
         /// Bootstrap only when no complete weeks exist under outputs_path.
         #[arg(long)]
@@ -127,6 +126,7 @@ async fn summarize_week_cmd(
         },
         order_inference: None,
         thread_inference: None,
+        week_inference: None,
         prepare_only,
     };
 
@@ -163,13 +163,17 @@ async fn summarize_week_cmd(
             threads_ok,
             threads_failed,
             failed_thread_ids,
+            week_complete,
+            headline,
         } => {
             info!(
                 %week,
                 threads_ok,
                 threads_failed,
+                week_complete,
+                ?headline,
                 ?failed_thread_ids,
-                "thread summaries done; week still incomplete until overview (PR6)"
+                "summarize-week agents finished"
             );
         }
     }

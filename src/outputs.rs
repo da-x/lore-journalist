@@ -21,7 +21,6 @@ pub fn root_index_path(outputs_path: &Path) -> PathBuf {
 }
 
 /// Exclusive lock file: `{outputs}/.summarize-week.lock`.
-#[allow(dead_code)] // used when flock lands (PR6)
 pub fn summarize_lock_path(outputs_path: &Path) -> PathBuf {
     outputs_path.join(".summarize-week.lock")
 }

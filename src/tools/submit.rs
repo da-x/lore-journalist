@@ -51,6 +51,13 @@ pub struct ThreadSummaryPayload {
     pub key_message_ids: Vec<String>,
 }
 
+/// Payload for `SubmitWeekOverview`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekOverviewPayload {
+    pub headline: String,
+    pub markdown_body: String,
+}
+
 /// Finish ordering agent: ordered list of thread roots.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct SubmitThreadOrder {
@@ -70,6 +77,15 @@ pub struct SubmitThreadSummary {
     /// Key message ids cited (normalized).
     #[serde(default)]
     pub key_message_ids: Vec<String>,
+}
+
+/// Finish week overview agent.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct SubmitWeekOverview {
+    /// One-line headline for the root catalog and week front matter.
+    pub headline: String,
+    /// Markdown body of the week overview (link to thread/*.md files).
+    pub markdown_body: String,
 }
 
 pub fn submit_thread_order(
@@ -97,6 +113,26 @@ pub fn submit_thread_summary(
         title: args.title,
         markdown_body: args.markdown_body,
         key_message_ids: args.key_message_ids,
+    };
+    match slot.try_submit(payload) {
+        Ok(()) => "submitted".to_string(),
+        Err(e) => e,
+    }
+}
+
+pub fn submit_week_overview(
+    slot: &SubmitSlot<WeekOverviewPayload>,
+    args: SubmitWeekOverview,
+) -> String {
+    if args.headline.trim().is_empty() {
+        return "ERROR: headline must be non-empty".to_string();
+    }
+    if args.markdown_body.trim().is_empty() {
+        return "ERROR: markdown_body must be non-empty".to_string();
+    }
+    let payload = WeekOverviewPayload {
+        headline: args.headline.trim().to_string(),
+        markdown_body: args.markdown_body,
     };
     match slot.try_submit(payload) {
         Ok(()) => "submitted".to_string(),

@@ -231,4 +231,85 @@ mod tests {
         let exp: HashSet<_> = ["<a>", "<b>"].into_iter().map(String::from).collect();
         assert!(validate_permutation(&["<b>".into(), "<a>".into()], &exp).is_ok());
     }
+
+    #[tokio::test]
+    async fn offline_week_overview_finalizes_complete() {
+        use crate::agent::week::run_week_overview_and_finalize;
+        use crate::outputs::complete_marker_path;
+
+        let pool = open_in_memory().await.unwrap();
+        insert_test_email(
+            &pool,
+            " <solo@t>",
+            "Solo thread",
+            "alice@ex.com",
+            "2026-07-18T12:00:00+00:00",
+            "important body\n",
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+
+        let index = Arc::new(EmailIndex::load(&pool).await.unwrap());
+        let week = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let out = temp_out();
+        std::fs::create_dir_all(out.join("2026-07-20/thread")).unwrap();
+
+        let active = select_active_threads(&index, week);
+        let order = vec![active[0].root_id.clone()];
+
+        // Seed a thread summary file (as if thread agent already ran).
+        let stem = crate::ids::file_stem_for_id(&order[0]);
+        std::fs::write(
+            out.join("2026-07-20/thread").join(format!("{stem}.md")),
+            "# Solo\n\nsummary\n",
+        )
+        .unwrap();
+
+        let ctx = ToolCtx::new(
+            pool.clone(),
+            index.clone(),
+            out.clone(),
+            week,
+            week_window(week),
+        );
+
+        let body = serde_json::json!({
+            "headline": "Quiet week of fixes",
+            "markdown_body": "A few client patches landed."
+        })
+        .to_string();
+        let call = Arc::new(AtomicUsize::new(0));
+        let cb: InferenceCallback = Arc::new(move |_msgs| {
+            let n = call.fetch_add(1, Ordering::SeqCst);
+            let body = body.clone();
+            async move {
+                if n == 0 {
+                    Ok(assistant_tool_calls(vec![tool_call(
+                        "1",
+                        "SubmitWeekOverview",
+                        &body,
+                    )]))
+                } else {
+                    Ok(da_harness::multi_tool::assistant_text("ok"))
+                }
+            }
+            .boxed()
+        });
+
+        run_week_overview_and_finalize(ctx, week, &order, &active, None, Some(cb))
+            .await
+            .unwrap();
+
+        assert!(complete_marker_path(&out, week).is_file());
+        let index_md = std::fs::read_to_string(out.join("2026-07-20/index.md")).unwrap();
+        assert!(index_md.contains("Quiet week of fixes"));
+        assert!(index_md.contains("Discussions this week"));
+        let root = std::fs::read_to_string(out.join("index.md")).unwrap();
+        assert!(root.contains("2026-07-20"));
+        assert!(root.contains("Quiet week of fixes"));
+
+        let _ = std::fs::remove_dir_all(&out);
+    }
 }

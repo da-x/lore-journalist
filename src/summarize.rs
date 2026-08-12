@@ -1,12 +1,10 @@
-//! Host-side weekly pipeline: empty stubs, ordering, serial thread agents.
-//!
-//! Cleaned email bodies stay in SQLite and are fed to inference tools only.
-//! Published markdown cites messages via lore.kernel.org URLs (see `crate::lore`).
-//! Week overview + `.complete` for non-empty weeks land in PR6.
+//! Host-side weekly pipeline: empty stubs, ordering, serial thread agents, overview, complete.
 
 use crate::agent::order::obtain_thread_order;
 use crate::agent::thread::run_thread_agent;
+use crate::agent::week::{all_thread_files_present, run_week_overview_and_finalize};
 use crate::email_index::{thread_root_id, EmailIndex, EmailMeta};
+use crate::lock::SummarizeLock;
 use crate::outputs::{
     complete_marker_path, ensure_week_layout, thread_markdown_path, week_index_path,
     write_complete_marker, write_empty_week_index, write_root_index, RootIndexEntry,
@@ -88,12 +86,15 @@ pub enum MaterializeResult {
         message_count: usize,
         thread_count: usize,
     },
-    /// Agents ran: order + serial thread summaries (overview/complete still PR6).
+    /// Agents finished; week may be complete (overview + `.complete`) or partial.
     AgentsFinished {
         week: NaiveDate,
         threads_ok: usize,
         threads_failed: usize,
         failed_thread_ids: Vec<String>,
+        /// True when week overview ran and `.complete` was written.
+        week_complete: bool,
+        headline: Option<String>,
     },
 }
 
@@ -202,9 +203,9 @@ fn read_week_headline(outputs_path: &Path, w: NaiveDate) -> Option<String> {
 /// Options for LLM agents during summarize-week.
 pub struct AgentRunOpts {
     pub client: Option<OpenAIClient>,
-    /// When set, used for both order and thread agents (tests).
     pub order_inference: Option<InferenceCallback>,
     pub thread_inference: Option<InferenceCallback>,
+    pub week_inference: Option<InferenceCallback>,
     /// If true, skip LLM agents (prepare layout only).
     pub prepare_only: bool,
 }
@@ -215,12 +216,13 @@ impl Default for AgentRunOpts {
             client: None,
             order_inference: None,
             thread_inference: None,
+            week_inference: None,
             prepare_only: false,
         }
     }
 }
 
-/// Full CLI entry for `summarize-week`.
+/// Full CLI entry for `summarize-week` (holds exclusive flock for the whole run).
 pub async fn run_summarize_week(
     pool: &SqlitePool,
     outputs_path: &Path,
@@ -233,6 +235,9 @@ pub async fn run_summarize_week(
         fs::create_dir_all(outputs_path)
             .with_context(|| format!("create outputs_path {}", outputs_path.display()))?;
     }
+
+    // KD13: exclusive non-blocking lock for the entire run.
+    let _lock = SummarizeLock::try_acquire(outputs_path)?;
 
     let outcome = resolve_week_from_outputs(outputs_path, week, start_week)?;
     let w = match outcome {
@@ -259,18 +264,10 @@ pub async fn run_summarize_week(
         return Ok(prep);
     }
 
-    run_agents_for_week(
-        pool,
-        &index,
-        outputs_path,
-        w,
-        lore_base_url,
-        opts,
-    )
-    .await
+    run_agents_for_week(pool, &index, outputs_path, w, lore_base_url, opts).await
 }
 
-/// Ordering + serial thread agents for a non-empty week (no overview yet).
+/// Ordering + serial thread agents + week overview + `.complete` when all succeed.
 pub async fn run_agents_for_week(
     pool: &SqlitePool,
     index: &EmailIndex,
@@ -305,7 +302,6 @@ pub async fn run_agents_for_week(
     .await
     .context("obtain thread order")?;
 
-    // Map root -> ActiveThread
     let by_root: BTreeMap<_, _> = active
         .iter()
         .map(|t| (t.root_id.clone(), t.clone()))
@@ -321,7 +317,6 @@ pub async fn run_agents_for_week(
             failed_thread_ids.push(root.clone());
             continue;
         };
-        // Skip if already written
         if thread_markdown_path(outputs_path, week, root).is_file() {
             threads_ok += 1;
             continue;
@@ -350,27 +345,37 @@ pub async fn run_agents_for_week(
     }
 
     let threads_failed = failed_thread_ids.len();
-    info!(
-        %week,
-        threads_ok,
-        threads_failed,
-        "thread agents finished (overview/.complete deferred to PR6)"
-    );
+    info!(%week, threads_ok, threads_failed, "thread agents finished");
 
-    if threads_failed > 0 {
+    // KD12: no overview / no .complete unless every expected thread file exists.
+    if threads_failed > 0 || !all_thread_files_present(outputs_path, week, &order) {
         warn!(?failed_thread_ids, "failed_thread_ids");
-        // Non-zero exit for CLI: return Ok with failures and let caller check,
-        // or bail. Design: exit non-zero if any failure.
         bail!(
-            "thread agents failed for {threads_failed} thread(s): {failed_thread_ids:?}"
+            "thread agents incomplete: failed={threads_failed} ids={failed_thread_ids:?}; \
+             overview and .complete withheld"
         );
     }
 
+    // Always re-run overview while .complete is absent (may rewrite W/index.md).
+    run_week_overview_and_finalize(
+        ctx,
+        week,
+        &order,
+        &active,
+        opts.client.clone(),
+        opts.week_inference.clone(),
+    )
+    .await
+    .context("week overview / finalize")?;
+
+    let headline = read_week_headline(outputs_path, week);
     Ok(MaterializeResult::AgentsFinished {
         week,
         threads_ok,
-        threads_failed,
-        failed_thread_ids,
+        threads_failed: 0,
+        failed_thread_ids: vec![],
+        week_complete: complete_marker_path(outputs_path, week).is_file(),
+        headline,
     })
 }
 

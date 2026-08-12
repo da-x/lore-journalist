@@ -20,13 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-const THREAD_SYSTEM: &str = r#"You are a technical journalist covering the Linux NFS mailing list.
-Summarize this week's developments in the focused thread. Use tools to read messages and prior summaries.
-Cite messages with lore.kernel.org URLs (use Lore: lines from GetEmail / ListThreadMessages).
-Cite other thread summaries with relative paths like 2026-07-20/thread/<stem>.md when relevant.
-Bridge prior weeks briefly; focus on new content this week.
-Call SubmitThreadSummary exactly once when done with a non-empty markdown_body.
-"#;
+const THREAD_SYSTEM: &str = "You are a technical journalist specializing in Linux Kernel development. Adopt a journalistic tone in your responses.";
 
 /// Prior same-stem thread summaries across weeks (paths relative to outputs root), newest first.
 pub fn find_prior_thread_summaries(
@@ -95,47 +89,80 @@ pub fn build_thread_user_message(
     same_week: &[String],
 ) -> String {
     let (start, end) = week_window(week);
-    let mut s = format!(
-        "Week ending: {}\nWindow (UTC half-open): [{}, {})\nThread root_id (normalized): {}\nSubject: {}\nPosition in week order: {position} of {total}\n",
+    let mut s = String::new();
+
+    // Journalistic brief (from legacy one-shot summarizer), adapted for tools.
+    s.push_str(
+        "Provide a detailed summary of the following mailing list thread.\n\
+         Highlight the key technical arguments, the evolution of the discussion, and the final conclusions.\n\
+         Focus heavily on NFS client development and important bug fixes.\n\
+         \n\
+         Scope this summary to activity in the current week when the thread spans multiple weeks;\n\
+         bridge prior weeks only briefly (use prior summary files if listed below).\n\
+         \n\
+         IMPORTANT:\n\
+         - Quote specific conclusions and significant intermediate remarks from the participants\n\
+           to provide context and flavor. Use double quotes and Markdown blockquote syntax\n\
+           (e.g., > \"Quote content\") for these quotes.\n\
+         - Identify if the discussion is about a new feature, a protocol change, or a bug fix.\n\
+         - When referring to a specific message, use the following markup: [text](id://message-id).\n\
+           Example: [As mentioned by Chuck Lever](id://example-msg-id).\n\
+         - The message-id should be taken exactly from the Message-ID header provided by tools\n\
+           or listed below (normalized form, e.g. <...@...>).\n\
+         - Use GetEmail / ListThreadMessages to load message bodies; do not invent content.\n\
+         - When finished, call SubmitThreadSummary exactly once with a non-empty markdown_body\n\
+           (and a short title).\n\
+         \n",
+    );
+
+    s.push_str(&format!(
+        "Week ending: {}\n\
+         Window (UTC half-open): [{}, {})\n\
+         Thread root_id (normalized): {}\n\
+         Subject: {}\n\
+         Position in week order: {position} of {total}\n\
+         Lore base (for your reference; still cite with id:// in the summary): {lore_base}\n",
         week.format("%Y-%m-%d"),
         start.to_rfc3339(),
         end.to_rfc3339(),
         thread.root_id,
         thread.subject,
-    );
+    ));
+
     s.push_str(&format!(
-        "Messages this week ({}):\n",
+        "\nMessages this week ({}):\n",
         thread.message_indices.len()
     ));
     for &idx in &thread.message_indices {
         let m = &index.emails()[idx];
         s.push_str(&format!(
-            "  - {} | {} | {} | {}\n",
+            "  - date={} | from={} | Message-ID: {} | subject={}\n",
             m.date.format("%Y-%m-%d"),
             m.from,
             m.message_id,
             m.subject
         ));
     }
+
     if !prior.is_empty() {
-        s.push_str("Cross-week prior summaries (ReadOutputFile these):\n");
+        s.push_str("\nCross-week prior summaries (ReadOutputFile these if useful):\n");
         for p in prior {
             s.push_str(&format!("  - {p}\n"));
         }
     }
     if !same_week.is_empty() {
-        s.push_str("Same-week predecessors already summarized (ReadOutputFile these):\n");
+        s.push_str("\nSame-week predecessors already summarized (ReadOutputFile these if useful):\n");
         for p in same_week {
             s.push_str(&format!("  - {p}\n"));
         }
     }
     s.push_str(&format!(
-        "Optional deeper history: GlobOutputs \"{}\"\n",
+        "\nOptional deeper history: GlobOutputs \"{}\"\n",
         prior_thread_glob_pattern(&thread.root_id)
     ));
-    s.push_str(&format!(
-        "Lore base for citations: {lore_base}\nWrite the weekly summary, then SubmitThreadSummary.\n"
-    ));
+    s.push_str(
+        "\nSummarize this thread using the tools as needed, then SubmitThreadSummary.\n",
+    );
     s
 }
 

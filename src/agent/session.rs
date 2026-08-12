@@ -14,6 +14,7 @@ use tracing::{info, warn};
 
 pub const ORDER_AGENT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 pub const THREAD_AGENT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+pub const WEEK_AGENT_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 /// Run one multi_tool session until `slot` is filled or timeout.
 ///

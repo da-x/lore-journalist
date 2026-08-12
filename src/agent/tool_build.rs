@@ -10,8 +10,9 @@ use crate::tools::search_related_threads::{
     search_related_threads, SearchRelatedThreadsArgs,
 };
 use crate::tools::submit::{
-    submit_thread_order, submit_thread_summary, SubmitSlot, SubmitThreadOrder,
-    SubmitThreadSummary, ThreadOrderPayload, ThreadSummaryPayload,
+    submit_thread_order, submit_thread_summary, submit_week_overview, SubmitSlot,
+    SubmitThreadOrder, SubmitThreadSummary, SubmitWeekOverview, ThreadOrderPayload,
+    ThreadSummaryPayload, WeekOverviewPayload,
 };
 use crate::tools::ToolCtx;
 use anyhow::Result;
@@ -289,6 +290,20 @@ pub fn build_thread_tools(
     let submit = Tool::new(Arc::new(move |args: SubmitThreadSummary| {
         let slot = slot.clone();
         async move { Ok(submit_thread_summary(&slot, args)) }.boxed()
+    }))?;
+    tools.push(submit);
+    Ok(tools)
+}
+
+/// Tools for the week overview agent (outputs only + submit).
+pub fn build_week_tools(
+    ctx: ToolCtx,
+    slot: SubmitSlot<WeekOverviewPayload>,
+) -> Result<Vec<Tool>> {
+    let mut tools = output_tools(ctx)?;
+    let submit = Tool::new(Arc::new(move |args: SubmitWeekOverview| {
+        let slot = slot.clone();
+        async move { Ok(submit_week_overview(&slot, args)) }.boxed()
     }))?;
     tools.push(submit);
     Ok(tools)
