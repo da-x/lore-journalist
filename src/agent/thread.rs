@@ -4,6 +4,7 @@ use super::session::{run_until_submit, THREAD_AGENT_TIMEOUT};
 use super::tool_build::build_thread_tools;
 use crate::email_index::EmailIndex;
 use crate::ids::file_stem_for_id;
+use crate::lore::lore_url_for_message_id;
 use crate::outputs::{
     format_message_list_lore, prior_thread_glob_pattern, thread_markdown_path, write_atomic,
     yaml_double_quoted,
@@ -16,9 +17,26 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use da_harness::multi_tool::InferenceCallback;
 use da_harness::OpenAIClient;
+use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use tracing::info;
+
+/// Rewrite `[text](id://message-id)` citations to lore permalinks for published markdown.
+static ID_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\]\(id://([^)]+)\)").expect("id link regex")
+});
+
+pub fn rewrite_id_links_to_lore(markdown: &str, lore_base: &str) -> String {
+    ID_LINK_RE
+        .replace_all(markdown, |caps: &regex::Captures| {
+            let mid = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let url = lore_url_for_message_id(lore_base, mid);
+            format!("]({url})")
+        })
+        .into_owned()
+}
 
 const THREAD_SYSTEM: &str = "You are a technical journalist specializing in Linux Kernel development. Adopt a journalistic tone in your responses.";
 
@@ -188,6 +206,8 @@ pub fn write_thread_summary_file(
         ));
     }
     let list = format_message_list_lore(lore_base, &items);
+    let body = rewrite_id_links_to_lore(payload.markdown_body.trim(), lore_base);
+    let title = rewrite_id_links_to_lore(&payload.title, lore_base);
 
     let mut fm = String::new();
     fm.push_str("---\n");
@@ -200,7 +220,7 @@ pub fn write_thread_summary_file(
         yaml_double_quoted(&week.format("%Y-%m-%d").to_string())
     ));
     fm.push_str(&format!("subject: {}\n", yaml_double_quoted(&thread.subject)));
-    fm.push_str(&format!("title: {}\n", yaml_double_quoted(&payload.title)));
+    fm.push_str(&format!("title: {}\n", yaml_double_quoted(&title)));
     fm.push_str("message_ids_this_week:\n");
     for &idx in &thread.message_indices {
         let m = &index.emails()[idx];
@@ -213,9 +233,9 @@ pub fn write_thread_summary_file(
         }
     }
     fm.push_str("---\n\n");
-    fm.push_str(&format!("# {}\n\n", payload.title));
+    fm.push_str(&format!("# {title}\n\n"));
     fm.push_str("## Summary\n\n");
-    fm.push_str(payload.markdown_body.trim());
+    fm.push_str(&body);
     fm.push_str("\n\n");
     fm.push_str(&list);
 
@@ -282,4 +302,20 @@ pub async fn run_thread_agent(
     )?;
     info!(root = %thread.root_id, path = %written.display(), "wrote thread summary");
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_id_links_to_lore() {
+        let md = r#"[As mentioned by Chuck Lever](id://<abc@def.com>) and [x](id://foo@bar)"#;
+        let out = rewrite_id_links_to_lore(md, "https://lore.kernel.org/linux-nfs/");
+        assert!(out.contains(
+            "](https://lore.kernel.org/linux-nfs/abc@def.com/)"
+        ));
+        assert!(out.contains("](https://lore.kernel.org/linux-nfs/foo@bar/)"));
+        assert!(!out.contains("id://"));
+    }
 }
