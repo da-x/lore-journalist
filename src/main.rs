@@ -1,5 +1,6 @@
 mod config;
 mod content_cleaner;
+mod db;
 mod email_index;
 mod git_handler;
 mod grep_cmd;
@@ -13,15 +14,13 @@ mod outputs;
 mod week;
 
 use crate::config::Config;
+use crate::db::open_db;
 use crate::email_index::EmailIndex;
 use crate::git_handler::GitHandler;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
-use sqlx::ConnectOptions;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
-use std::str::FromStr;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -76,19 +75,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn open_db(db_path: &str, create_if_missing: bool) -> Result<SqlitePool> {
-    info!("Connecting to SQLite database at: {db_path}");
-    let options = SqliteConnectOptions::from_str(&format!("sqlite:{db_path}"))?
-        .create_if_missing(create_if_missing)
-        .disable_statement_logging();
-
-    SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await
-        .with_context(|| format!("Failed to open SQLite database: {db_path}"))
-}
-
 async fn meta(config: Config) -> Result<()> {
     let pool = open_db(&config.db_path, false).await?;
 
@@ -111,23 +97,8 @@ async fn build_db(config: Config) -> Result<()> {
     info!("Opening git repository at: {}", config.git_repo_path);
     let g = GitHandler::open(&config.git_repo_path)?;
 
+    // open_db runs sqlx migrations (creates/updates schema).
     let pool = open_db(&config.db_path, true).await?;
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS emails (
-            message_id TEXT PRIMARY KEY NOT NULL,
-            subject TEXT NOT NULL,
-            from_addr TEXT NOT NULL,
-            date TEXT NOT NULL,
-            body BLOB NOT NULL,
-            in_reply_to TEXT,
-            "references" TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .context("Failed to create emails table")?;
 
     info!("Scanning git repository for messages...");
     let messages = g.get_all_messages()?;
@@ -156,7 +127,7 @@ async fn build_db(config: Config) -> Result<()> {
             serde_json::to_string(&msg.references).context("Failed to serialize references")?;
         let date = msg.date.to_rfc3339();
 
-        // Skip rows that already exist (by message_id primary key).
+        // Compile-time checked insert (sqlx::query!); skip existing PKs.
         let result = sqlx::query!(
             r#"
             INSERT OR IGNORE INTO emails

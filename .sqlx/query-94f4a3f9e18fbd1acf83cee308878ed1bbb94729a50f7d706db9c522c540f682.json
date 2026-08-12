@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO emails\n                (message_id, subject, from_addr, date, body, in_reply_to, \"references\")\n            VALUES (?, ?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "94f4a3f9e18fbd1acf83cee308878ed1bbb94729a50f7d706db9c522c540f682"
+}

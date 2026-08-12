@@ -227,16 +227,15 @@ impl EmailIndex {
 
     /// Load and decompress bodies keyed by **normalized** message_id.
     ///
-    /// On normalized-id collision, the first row encountered is kept. Prefer
-    /// resolving bodies via [`Self::load_body`] (uses the index winner's raw PK)
-    /// when a precise earliest-by-date choice matters; index load already folds
-    /// collisions by date.
+    /// On normalized-id collision, earliest-by-date wins (`ORDER BY date`, first insert kept).
+    /// Prefer [`Self::load_body`] when you need the index winner's raw PK path.
     pub async fn load_all_bodies(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-        // Query shape kept compatible with sqlx offline cache (no ORDER BY).
-        let rows = sqlx::query!(r#"SELECT message_id, body AS "body!" FROM emails"#)
-            .fetch_all(pool)
-            .await
-            .context("Failed to load email bodies")?;
+        let rows = sqlx::query!(
+            r#"SELECT message_id, body AS "body!" FROM emails ORDER BY date"#
+        )
+        .fetch_all(pool)
+        .await
+        .context("Failed to load email bodies")?;
 
         let mut bodies = HashMap::with_capacity(rows.len());
         for row in rows {
@@ -301,35 +300,9 @@ fn decompress_body(compressed: &[u8]) -> Result<String> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use std::str::FromStr;
 
     async fn pool_with_schema() -> SqlitePool {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")
-            .unwrap()
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::query(
-            r#"
-            CREATE TABLE emails (
-                message_id TEXT PRIMARY KEY NOT NULL,
-                subject TEXT NOT NULL,
-                from_addr TEXT NOT NULL,
-                date TEXT NOT NULL,
-                body BLOB NOT NULL,
-                in_reply_to TEXT,
-                "references" TEXT NOT NULL
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool
+        crate::db::open_in_memory().await.expect("in-memory db + migrations")
     }
 
     async fn insert_email(
@@ -342,19 +315,21 @@ mod tests {
         references: &str,
     ) {
         let compressed = zstd::encode_all(body.as_bytes(), 3).unwrap();
-        sqlx::query(
+        let from_addr = "a@b";
+        sqlx::query!(
             r#"
             INSERT INTO emails
                 (message_id, subject, from_addr, date, body, in_reply_to, "references")
-            VALUES (?, ?, 'a@b', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             "#,
+            message_id,
+            subject,
+            from_addr,
+            date,
+            compressed,
+            in_reply_to,
+            references,
         )
-        .bind(message_id)
-        .bind(subject)
-        .bind(date)
-        .bind(compressed)
-        .bind(in_reply_to)
-        .bind(references)
         .execute(pool)
         .await
         .unwrap();
