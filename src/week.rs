@@ -27,6 +27,7 @@ pub fn week_window(w: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
 }
 
 /// True if `t` falls in the half-open week window for `w`.
+#[allow(dead_code)]
 pub fn in_week_window(w: NaiveDate, t: DateTime<Utc>) -> bool {
     let (start, end_excl) = week_window(w);
     t >= start && t < end_excl

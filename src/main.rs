@@ -7,16 +7,15 @@ mod grep_cmd;
 mod ids;
 mod models;
 mod openai_client;
-// Path helpers and week resolution used by summarize-week (later PRs).
-#[allow(dead_code)]
 mod outputs;
-#[allow(dead_code)]
+mod summarize;
 mod week;
 
 use crate::config::Config;
 use crate::db::open_db;
 use crate::email_index::EmailIndex;
 use crate::git_handler::GitHandler;
+use crate::summarize::{require_outputs_path, run_summarize_week, MaterializeResult};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -44,6 +43,18 @@ enum Commands {
         /// Regular expression to search for in composed Subject + Body text.
         pattern: String,
     },
+    /// Materialize one week's message markdown (and empty-week stubs).
+    ///
+    /// PR2 scope: writes `messages/*.md` for non-empty weeks (leaves week incomplete
+    /// for later agent PRs). Empty weeks write a stub index + `.complete`.
+    SummarizeWeek {
+        /// Bootstrap only when no complete weeks exist under outputs_path.
+        #[arg(long)]
+        start_week: Option<String>,
+        /// Explicit week end date (YYYY-MM-DD); wins over auto-resolve.
+        #[arg(long)]
+        week: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -70,8 +81,43 @@ async fn main() -> Result<()> {
             let pool = open_db(&config.db_path, false).await?;
             grep_cmd::run_grep(&pool, &pattern).await?;
         }
+        Commands::SummarizeWeek { start_week, week } => {
+            summarize_week_cmd(config, start_week.as_deref(), week.as_deref()).await?;
+        }
     }
 
+    Ok(())
+}
+
+async fn summarize_week_cmd(
+    config: Config,
+    start_week: Option<&str>,
+    week: Option<&str>,
+) -> Result<()> {
+    let outputs = require_outputs_path(&config.outputs_path)?;
+    let pool = open_db(&config.db_path, false).await?;
+
+    let result = run_summarize_week(&pool, &outputs, week, start_week).await?;
+    match result {
+        MaterializeResult::AlreadyComplete { week } => {
+            info!(%week, "already complete; nothing to do");
+        }
+        MaterializeResult::EmptyWeekComplete { week } => {
+            info!(%week, "empty week stub written and marked complete");
+        }
+        MaterializeResult::MessagesWritten {
+            week,
+            message_count,
+            thread_count,
+        } => {
+            info!(
+                %week,
+                message_count,
+                thread_count,
+                "messages materialized; week left incomplete (thread agents not yet implemented)"
+            );
+        }
+    }
     Ok(())
 }
 
