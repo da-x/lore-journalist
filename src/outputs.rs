@@ -1,7 +1,8 @@
 //! Output path builders and writers for weekly markdown editions.
+//!
+//! Message bodies are **not** written under `outputs_path`. Citations use lore
+//! permalinks (`crate::lore`); cleaned bodies stay in SQLite for LLM tools only.
 
-use crate::email_index::{thread_root_id, EmailMeta};
-use crate::ids::{file_stem_for_id, normalize_message_id};
 use crate::week::week_window;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -46,38 +47,27 @@ pub fn thread_dir(outputs_path: &Path, w: NaiveDate) -> PathBuf {
     week_dir(outputs_path, w).join("thread")
 }
 
-/// `{outputs}/{W}/messages/`.
-pub fn messages_dir(outputs_path: &Path, w: NaiveDate) -> PathBuf {
-    week_dir(outputs_path, w).join("messages")
-}
-
 /// `{outputs}/{W}/thread/{stem}.md` for a thread root id (any form; normalized inside).
 #[allow(dead_code)] // thread agents (PR5+)
 pub fn thread_markdown_path(outputs_path: &Path, w: NaiveDate, thread_root_id: &str) -> PathBuf {
+    use crate::ids::file_stem_for_id;
     let stem = file_stem_for_id(thread_root_id);
     thread_dir(outputs_path, w).join(format!("{stem}.md"))
-}
-
-/// `{outputs}/{W}/messages/{stem}.md` for a message id (any form; normalized inside).
-pub fn message_markdown_path(outputs_path: &Path, w: NaiveDate, message_id: &str) -> PathBuf {
-    let stem = file_stem_for_id(message_id);
-    messages_dir(outputs_path, w).join(format!("{stem}.md"))
 }
 
 /// Glob pattern (relative to `outputs_path`) for all weeks of a thread:
 /// `*/thread/{stem}.md`.
 #[allow(dead_code)] // prior-week discovery (PR5+)
 pub fn prior_thread_glob_pattern(thread_root_id: &str) -> String {
+    use crate::ids::file_stem_for_id;
     let stem = file_stem_for_id(thread_root_id);
     format!("*/thread/{stem}.md")
 }
 
-/// Create `W/`, `W/thread/`, `W/messages/`.
+/// Create `W/` and `W/thread/` (no per-message archive directory).
 pub fn ensure_week_layout(outputs_path: &Path, w: NaiveDate) -> Result<()> {
     fs::create_dir_all(thread_dir(outputs_path, w))
         .with_context(|| format!("mkdir thread dir for week {w}"))?;
-    fs::create_dir_all(messages_dir(outputs_path, w))
-        .with_context(|| format!("mkdir messages dir for week {w}"))?;
     Ok(())
 }
 
@@ -121,56 +111,6 @@ pub fn yaml_double_quoted(s: &str) -> String {
     }
     out.push('"');
     out
-}
-
-/// Render one message file (front matter + body).
-pub fn format_message_markdown(msg: &EmailMeta, body: &str) -> String {
-    let stem = file_stem_for_id(&msg.message_id);
-    let root = thread_root_id(msg);
-    let in_reply = msg
-        .in_reply_to
-        .as_deref()
-        .map(normalize_message_id);
-
-    let mut fm = String::new();
-    fm.push_str("---\n");
-    fm.push_str(&format!(
-        "message_id: {}\n",
-        yaml_double_quoted(&msg.message_id)
-    ));
-    fm.push_str(&format!("subject: {}\n", yaml_double_quoted(&msg.subject)));
-    fm.push_str(&format!("from: {}\n", yaml_double_quoted(&msg.from)));
-    fm.push_str(&format!(
-        "date: {}\n",
-        yaml_double_quoted(&msg.date.to_rfc3339())
-    ));
-    if let Some(ref irt) = in_reply {
-        fm.push_str(&format!("in_reply_to: {}\n", yaml_double_quoted(irt)));
-    }
-    fm.push_str(&format!(
-        "thread_root_id: {}\n",
-        yaml_double_quoted(&root)
-    ));
-    fm.push_str(&format!("file_stem: {}\n", yaml_double_quoted(&stem)));
-    fm.push_str("---\n\n");
-    fm.push_str(body);
-    if !body.is_empty() && !body.ends_with('\n') {
-        fm.push('\n');
-    }
-    fm
-}
-
-/// Write `{W}/messages/{stem}.md` for `msg` (idempotent overwrite).
-pub fn write_message_markdown(
-    outputs_path: &Path,
-    w: NaiveDate,
-    msg: &EmailMeta,
-    body: &str,
-) -> Result<PathBuf> {
-    let path = message_markdown_path(outputs_path, w, &msg.message_id);
-    let content = format_message_markdown(msg, body);
-    write_atomic(&path, &content)?;
-    Ok(path)
 }
 
 /// Empty-week `W/index.md` content.
@@ -240,11 +180,26 @@ pub fn write_complete_marker(outputs_path: &Path, w: NaiveDate) -> Result<()> {
     Ok(())
 }
 
+/// Host-built markdown list of messages for a thread file, linking to lore.
+#[allow(dead_code)] // used when writing thread/*.md (PR5+)
+pub fn format_message_list_lore(
+    lore_base: &str,
+    items: &[(/* date label */ String, /* from */ String, /* subject */ String, /* message_id */ String)],
+) -> String {
+    use crate::lore::lore_url_for_message_id;
+    let mut out = String::from("## Messages this week\n\n");
+    for (date, from, subject, mid) in items {
+        let label = format!("{date} {from} — {subject}");
+        let url = lore_url_for_message_id(lore_base, mid);
+        out.push_str(&format!("- [{label}]({url})\n"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::email_index::EmailMeta;
-    use chrono::{TimeZone, Utc};
+    use crate::ids::file_stem_for_id;
     use std::path::Path;
 
     #[test]
@@ -267,37 +222,16 @@ mod tests {
 
         let msg = " <abc@def.com>";
         assert_eq!(
-            message_markdown_path(root, w, msg),
-            PathBuf::from("/tmp/out/2026-07-20/messages/%3Cabc%40def.com%3E.md")
-        );
-        assert_eq!(
             thread_markdown_path(root, w, msg),
-            PathBuf::from("/tmp/out/2026-07-20/thread/%3Cabc%40def.com%3E.md")
+            PathBuf::from(format!(
+                "/tmp/out/2026-07-20/thread/{}.md",
+                file_stem_for_id(msg)
+            ))
         );
         assert_eq!(
             prior_thread_glob_pattern(msg),
-            "*/thread/%3Cabc%40def.com%3E.md"
+            format!("*/thread/{}.md", file_stem_for_id(msg))
         );
-    }
-
-    #[test]
-    fn format_message_uses_normalized_ids() {
-        let msg = EmailMeta {
-            message_id: "<abc@def.com>".into(),
-            message_id_raw: " <abc@def.com>".into(),
-            subject: r#"Hello "world""#.into(),
-            from: "a@b".into(),
-            date: Utc.with_ymd_and_hms(2026, 7, 18, 12, 0, 0).unwrap(),
-            in_reply_to: Some(" <parent@x>".into()),
-            references: vec![" <parent@x>".into()],
-        };
-        let md = format_message_markdown(&msg, "body line\n");
-        assert!(md.contains("message_id: \"<abc@def.com>\""));
-        assert!(md.contains("in_reply_to: \"<parent@x>\""));
-        assert!(md.contains("thread_root_id: \"<parent@x>\""));
-        assert!(md.contains("file_stem: \"%3Cabc%40def.com%3E\""));
-        assert!(md.contains(r#"subject: "Hello \"world\"""#));
-        assert!(md.contains("body line"));
     }
 
     #[test]
@@ -308,5 +242,22 @@ mod tests {
         assert!(s.contains("No mailing list activity"));
         assert!(s.contains("2026-07-14"));
         assert!(s.contains("2026-07-21"));
+    }
+
+    #[test]
+    fn message_list_uses_lore_urls() {
+        let md = format_message_list_lore(
+            "https://lore.kernel.org/linux-nfs/",
+            &[(
+                "2026-07-18".into(),
+                "Alice".into(),
+                "Hello".into(),
+                " <20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>".into(),
+            )],
+        );
+        assert!(md.contains(
+            "https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
+        ));
+        assert!(!md.contains("messages/"));
     }
 }

@@ -1,11 +1,13 @@
-//! Host-side weekly materialization (PR2): messages + empty-week stubs.
+//! Host-side weekly preparation (PR2): empty-week stubs + active-thread selection.
 //!
-//! Later PRs add ordering / thread / overview agents on top of this path.
+//! Cleaned email bodies stay in SQLite and are fed to inference tools only.
+//! Published markdown cites messages via lore.kernel.org URLs (see `crate::lore`).
+//! Later PRs add ordering / thread / overview agents.
 
 use crate::email_index::{thread_root_id, EmailIndex, EmailMeta};
 use crate::outputs::{
     complete_marker_path, ensure_week_layout, week_index_path, write_complete_marker,
-    write_empty_week_index, write_message_markdown, write_root_index, RootIndexEntry,
+    write_empty_week_index, write_root_index, RootIndexEntry,
 };
 use crate::week::{
     assert_week_ended, resolve_week_from_outputs, scan_week_dirs, week_window, ResolveWeekOutcome,
@@ -54,7 +56,8 @@ pub fn select_active_threads(index: &EmailIndex, w: NaiveDate) -> Vec<ActiveThre
         .collect()
 }
 
-/// Flat list of in-window messages (sorted by date) for materialization.
+/// Flat list of in-window messages (sorted by date) — for agents/tools, not disk.
+#[allow(dead_code)]
 pub fn in_window_messages<'a>(index: &'a EmailIndex, w: NaiveDate) -> Vec<&'a EmailMeta> {
     let (start, end_excl) = week_window(w);
     let mut msgs: Vec<&EmailMeta> = index
@@ -66,24 +69,25 @@ pub fn in_window_messages<'a>(index: &'a EmailIndex, w: NaiveDate) -> Vec<&'a Em
     msgs
 }
 
-/// Result of a summarize-week materialization run (PR2 scope).
+/// Result of a summarize-week preparation run (PR2 scope).
 #[derive(Debug, Clone)]
 pub enum MaterializeResult {
     /// Week already had `.complete`; no work done.
     AlreadyComplete { week: NaiveDate },
     /// Empty week stub written and marked complete.
     EmptyWeekComplete { week: NaiveDate },
-    /// In-window messages written; week left incomplete (agents not run yet).
-    MessagesWritten {
+    /// Non-empty week: layout ready, threads selected; no message files on disk.
+    /// Week left incomplete until agents run (later PRs).
+    WeekPrepared {
         week: NaiveDate,
         message_count: usize,
         thread_count: usize,
     },
 }
 
-/// Run PR2 materialization for one resolved week.
+/// Run PR2 preparation for one resolved week (no per-message markdown writes).
 pub async fn materialize_week(
-    pool: &SqlitePool,
+    _pool: &SqlitePool,
     index: &EmailIndex,
     outputs_path: &Path,
     week: NaiveDate,
@@ -107,30 +111,17 @@ pub async fn materialize_week(
         return Ok(MaterializeResult::EmptyWeekComplete { week });
     }
 
-    let messages = in_window_messages(index, week);
+    let message_count = active.iter().map(|t| t.message_indices.len()).sum();
     info!(
         %week,
-        messages = messages.len(),
+        message_count,
         threads = active.len(),
-        "materializing in-window messages"
+        "week prepared (cleaned bodies remain in DB for inference; no message markdown on disk)"
     );
 
-    for msg in &messages {
-        let body = index
-            .load_body(pool, &msg.message_id)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to load body for message_id={} raw={:?}",
-                    msg.message_id, msg.message_id_raw
-                )
-            })?;
-        write_message_markdown(outputs_path, week, msg, &body)?;
-    }
-
-    Ok(MaterializeResult::MessagesWritten {
+    Ok(MaterializeResult::WeekPrepared {
         week,
-        message_count: messages.len(),
+        message_count,
         thread_count: active.len(),
     })
 }
@@ -139,14 +130,13 @@ pub async fn materialize_week(
 pub fn write_empty_week_stub(outputs_path: &Path, week: NaiveDate) -> Result<()> {
     ensure_week_layout(outputs_path, week)?;
     write_empty_week_index(outputs_path, week)?;
-    // Root index must list this week as complete → write complete last after root.
-    // Build entries including this week.
     let mut complete = scan_week_dirs(outputs_path)?.0;
     if !complete.contains(&week) {
         complete.push(week);
         complete.sort_unstable();
     }
-    let entries = root_entries_for_complete_weeks(outputs_path, &complete, Some((week, "No activity")))?;
+    let entries =
+        root_entries_for_complete_weeks(outputs_path, &complete, Some((week, "No activity")))?;
     write_root_index(outputs_path, &entries)?;
     write_complete_marker(outputs_path, week)?;
     Ok(())
@@ -197,7 +187,7 @@ fn read_week_headline(outputs_path: &Path, w: NaiveDate) -> Option<String> {
     None
 }
 
-/// Full CLI entry for `summarize-week` (PR2: materialize only).
+/// Full CLI entry for `summarize-week` (PR2: prepare only).
 pub async fn run_summarize_week(
     pool: &SqlitePool,
     outputs_path: &Path,
@@ -220,7 +210,7 @@ pub async fn run_summarize_week(
 
     assert_week_ended(w)?;
 
-    info!("Loading email index for materialization of week ending {w}");
+    info!("Loading email index for week ending {w}");
     let index = EmailIndex::load(pool).await?;
     materialize_week(pool, &index, outputs_path, w).await
 }
@@ -240,8 +230,8 @@ pub fn require_outputs_path(config_outputs: &Option<String>) -> Result<PathBuf> 
 mod tests {
     use super::*;
     use crate::db::open_in_memory;
-    use crate::ids::file_stem_for_id;
-    use crate::outputs::root_index_path;
+    use crate::lore::lore_url_for_message_id;
+    use crate::outputs::{format_message_list_lore, root_index_path};
     use crate::week::week_window;
     use chrono::{TimeZone, Utc};
 
@@ -288,12 +278,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn leading_space_pk_writes_message_file() {
+    async fn non_empty_week_does_not_write_message_files() {
         let pool = open_in_memory().await.unwrap();
-        // Inside week ending 2026-07-20 → window [2026-07-14, 2026-07-21)
         insert_email(
             &pool,
-            " <msg@example.com>",
+            " <20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>",
             "Test subject",
             "2026-07-18T12:00:00+00:00",
             "hello body\n",
@@ -306,13 +295,9 @@ mod tests {
         let out = temp_outputs();
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
 
-        // assert_week_ended needs today > W; use materialize internals carefully —
-        // call write path with a forced past week via materialize after patching check.
-        // We call ensure + write_message directly if assert fails on future dates.
-        // Today is 2026-08-12 per user_info historically; week 2026-07-20 has ended.
         let result = materialize_week(&pool, &index, &out, w).await.unwrap();
         match result {
-            MaterializeResult::MessagesWritten {
+            MaterializeResult::WeekPrepared {
                 message_count,
                 thread_count,
                 ..
@@ -323,24 +308,51 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
 
-        let stem = file_stem_for_id("<msg@example.com>");
-        let path = out
-            .join("2026-07-20")
-            .join("messages")
-            .join(format!("{stem}.md"));
-        assert!(path.is_file(), "missing {}", path.display());
-        let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("message_id: \"<msg@example.com>\""));
-        assert!(text.contains("file_stem:"));
-        assert!(text.contains("hello body"));
+        let messages_dir = out.join("2026-07-20").join("messages");
+        assert!(
+            !messages_dir.exists(),
+            "must not create messages/ archive directory"
+        );
+        assert!(out.join("2026-07-20").join("thread").is_dir());
         assert!(!complete_marker_path(&out, w).is_file());
+
+        // Bodies still available for inference.
+        let body = index
+            .load_body(
+                &pool,
+                "<20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>",
+            )
+            .await
+            .unwrap();
+        assert_eq!(body, "hello body\n");
+
+        // Lore link shape for host-built message lists.
+        let list = format_message_list_lore(
+            "https://lore.kernel.org/linux-nfs/",
+            &[(
+                "2026-07-18".into(),
+                "alice@example.com".into(),
+                "Test subject".into(),
+                " <20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>".into(),
+            )],
+        );
+        assert!(list.contains(
+            "https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
+        ));
+        assert_eq!(
+            lore_url_for_message_id(
+                "https://lore.kernel.org/linux-nfs/",
+                "<20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>"
+            ),
+            "https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
+        );
+
         let _ = fs::remove_dir_all(&out);
     }
 
     #[tokio::test]
     async fn empty_week_writes_stub_and_complete() {
         let pool = open_in_memory().await.unwrap();
-        // Message outside the window.
         insert_email(
             &pool,
             " <old@example.com>",
@@ -365,12 +377,12 @@ mod tests {
         assert!(body.contains("No mailing list activity"));
         assert!(body.contains("empty: true"));
         assert!(complete_marker_path(&out, w).is_file());
+        assert!(!out.join("2026-07-20").join("messages").exists());
 
         let root = fs::read_to_string(root_index_path(&out)).unwrap();
         assert!(root.contains("2026-07-20"));
         assert!(root.contains("No activity"));
 
-        // Second run is already-complete no-op via materialize.
         let again = materialize_week(&pool, &index, &out, w).await.unwrap();
         assert!(matches!(again, MaterializeResult::AlreadyComplete { .. }));
 
@@ -379,9 +391,6 @@ mod tests {
 
     #[test]
     fn select_active_respects_half_open_window() {
-        // Build a tiny in-memory index without DB: use EmailIndex::load is heavy —
-        // unit-test window via in_window using synthetic isn't available without load.
-        // Covered by empty/message integration tests above.
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
         let (start, end) = week_window(w);
         assert_eq!(

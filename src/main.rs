@@ -5,6 +5,7 @@ mod email_index;
 mod git_handler;
 mod grep_cmd;
 mod ids;
+mod lore;
 mod models;
 mod openai_client;
 mod outputs;
@@ -43,10 +44,12 @@ enum Commands {
         /// Regular expression to search for in composed Subject + Body text.
         pattern: String,
     },
-    /// Materialize one week's message markdown (and empty-week stubs).
+    /// Prepare one week edition (empty-week stubs; non-empty selects active threads).
     ///
-    /// PR2 scope: writes `messages/*.md` for non-empty weeks (leaves week incomplete
-    /// for later agent PRs). Empty weeks write a stub index + `.complete`.
+    /// Does **not** write per-message markdown. Cleaned bodies stay in the DB for
+    /// inference; published summaries link messages to lore.kernel.org.
+    /// Empty weeks write a stub index + `.complete`. Non-empty weeks leave the
+    /// week incomplete until thread agents run (later PRs).
     SummarizeWeek {
         /// Bootstrap only when no complete weeks exist under outputs_path.
         #[arg(long)]
@@ -105,7 +108,7 @@ async fn summarize_week_cmd(
         MaterializeResult::EmptyWeekComplete { week } => {
             info!(%week, "empty week stub written and marked complete");
         }
-        MaterializeResult::MessagesWritten {
+        MaterializeResult::WeekPrepared {
             week,
             message_count,
             thread_count,
@@ -114,7 +117,8 @@ async fn summarize_week_cmd(
                 %week,
                 message_count,
                 thread_count,
-                "messages materialized; week left incomplete (thread agents not yet implemented)"
+                lore_base = %config.lore_base_url,
+                "week prepared (no message files on disk); incomplete until agents run"
             );
         }
     }

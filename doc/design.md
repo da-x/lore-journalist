@@ -4,7 +4,7 @@
 |---|---|
 | **Author** | TBD |
 | **Date** | 2026-08-10 |
-| **Status** | Approved draft (rev 5 — serial ordered thread agents) |
+| **Status** | Approved draft (rev 6 — lore links; no message markdown on disk) |
 | **Workspace** | `/home/dan/vd/newnotes/workdirs/nfs-mailing-list-summary/new-code` |
 | **Location** | `doc/design.md` |
 | **Depends on** | `build-db` SQLite corpus; [da-harness](https://github.com/da-x/da-harness) `r/0.5` (`multi_tool`), pin git rev at implement time |
@@ -15,7 +15,7 @@
 
 This project already ingests a lore-style git mail archive into SQLite (`build-db`), indexes threads in memory (`EmailIndex`), and demos regex search (`grep`). Legacy sibling code (`../code/`) produced weekly journalistic summaries with one-shot LLM calls and Hugo publish — but dumped full thread bodies into prompts, had no multi-week memory, and did not expose discovery tools.
 
-This design turns `new-code` into a **weekly discussion summarizer**: for each completed calendar week, the host deterministically materializes raw message markdown under `outputs_path`, then runs **da-harness multi_tool agents** in three stages: (1) an **ordering agent** that ranks the week’s discussions by dependency / reading order; (2) **one session per active thread**, executed **strictly serially** in that order; (3) a **week-overview** session. Agents explore mail and prior outputs via tools, then submit results through typed `submit_*` tools. Previous week directories are never rewritten. Multi-week threads are handled by reading prior `thread/<id>.md` files; same-week threads summarized earlier in the serial order are also readable by later sessions.
+This design turns `new-code` into a **weekly discussion summarizer**: for each completed calendar week, the host selects active threads, then runs **da-harness multi_tool agents** in three stages: (1) an **ordering agent** that ranks the week’s discussions by dependency / reading order; (2) **one session per active thread**, executed **strictly serially** in that order; (3) a **week-overview** session. Agents explore mail (cleaned bodies from SQLite) and prior **summary** outputs via tools, then submit results through typed `submit_*` tools. **Per-message markdown is not written** under `outputs_path`; citations link out to [lore.kernel.org](https://lore.kernel.org/) (e.g. `https://lore.kernel.org/linux-nfs/<message-id-without-brackets>/`). Cleaned/trimmed bodies exist only as inference input. Previous week directories are never rewritten. Multi-week threads are handled by reading prior `thread/<id>.md` summaries; same-week threads summarized earlier in the serial order are also readable by later sessions.
 
 Empty weeks still produce a completed stub edition so auto-advance never stalls. Thread failures continue (resume-friendly) but **never** mark a week complete or run overview until every expected thread file exists and overview succeeds.
 
@@ -28,7 +28,7 @@ Empty weeks still produce a completed stub edition so auto-advance never stalls.
 | Component | Path | Role |
 |---|---|---|
 | CLI | `src/main.rs` | Commands: `BuildDB`, `Meta`, `Grep` |
-| Config | `src/config.rs` | `openai.{api_base,model_name,api_key}`, `git_repo_path`, `db_path`, `base_url`, `outputs_path: Option<String>` |
+| Config | `src/config.rs` | `openai.{api_base,model_name,api_key}`, `git_repo_path`, `db_path`, `base_url`, `lore_base_url` (default `https://lore.kernel.org/linux-nfs/`), `outputs_path: Option<String>` |
 | Git ingest | `src/git_handler.rs` | Walks commits with blob `m`, parses mail, runs `clean_email_body` before DB insert |
 | Body cleaner | `src/content_cleaner.rs` | Strips patch diffs and large quote blocks at ingest |
 | Models | `src/models.rs` | `EmailMessage`, `Thread` |
@@ -84,13 +84,14 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 
 1. Add a CLI command that produces **exactly one completed week** of markdown under `config.outputs_path` (including empty weeks as stub editions).
 2. Use **da-harness multi_tool** agents with a documented tool catalog (mail + outputs + submit).
-3. Host writes **raw message files** deterministically from the DB; agents produce **order**, **thread summaries**, and **week overview** (not raw mail files).
-4. **Never rewrite** prior week outputs once `.complete` exists; agents may only read them.
-5. Support **multi-week threads** via host-injected prior paths + glob/read of `{outputs_path}/*/thread/<thread-id>.md`.
-6. Support **same-week dependencies** via an ordering agent + serial thread sessions that can read earlier same-week `thread/*.md` files.
-7. Resume incomplete weeks; fail if the target week has not ended yet (UTC).
-8. Keep `build-db` / `meta` / `grep` working; reuse `EmailIndex` and cleaned bodies.
-9. Single-flight: exclusive lock so concurrent `summarize-week` process runs do not race.
+3. Host does **not** archive message bodies under `outputs_path`. Agents produce **order**, **thread summaries**, and **week overview**. Cleaned bodies are loaded from SQLite only for inference tools (`GetEmail`, greps).
+4. Message citations in published markdown use **lore permalinks** (`config.lore_base_url` + Message-ID without `<>`), not local files.
+5. **Never rewrite** prior week outputs once `.complete` exists; agents may only read them.
+6. Support **multi-week threads** via host-injected prior paths + glob/read of `{outputs_path}/*/thread/<thread-id>.md`.
+7. Support **same-week dependencies** via an ordering agent + serial thread sessions that can read earlier same-week `thread/*.md` files.
+8. Resume incomplete weeks; fail if the target week has not ended yet (UTC).
+9. Keep `build-db` / `meta` / `grep` working; reuse `EmailIndex` and cleaned bodies.
+10. Single-flight: exclusive lock so concurrent `summarize-week` process runs do not race.
 
 ### Non-Goals
 
@@ -112,9 +113,9 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 |---|---|---|
 | KD1 | **Week window** (half-open UTC): `[W−6 00:00:00 UTC, W+1 00:00:00 UTC)`. Folder name `W` is any calendar end date (not forced to Sunday / ISO week). | Avoids inclusive end-of-day float/chrono awkwardness; clear unit tests at day boundaries; matches product “arbitrary end-date.” |
 | KD2 | **Agent granularity (ordered serial)**: (1) one **ordering** multi_tool session ranks all active threads by dependency / reading order; (2) one multi_tool session **per active thread**, run **strictly serially** in that order (never concurrent); (3) one **week overview** agent only if all expected thread files exist. Empty week: no agents (stub overview). | Dependencies between discussions (related subjects, patch series, “read A before B”) require a deliberate order; serial sessions let later agents read same-week summaries already written. Parallel thread agents are **out of scope**. |
-| KD3 | **Completion protocol**: host writes `messages/*.md` deterministically; ordering agent submits `SubmitThreadOrder` (or host reuses valid `.thread-order.json`); thread/week agents finish via `submit_*` tools; **continue on thread failure** (still serial); never write root `index.md` or `W/.complete` until **all** expected `thread/*.md` exist **and** week overview succeeds; exit non-zero on any failure. Re-run reuses order file when valid, executes only missing thread files + overview. **Do not run overview** if any expected thread file is missing. Ordering failure aborts before new thread sessions. | Single consistent resume model; no hollow weeks; no premature “published” state. |
+| KD3 | **Completion protocol**: host does not write message archives; ordering agent submits `SubmitThreadOrder` (or host reuses valid `.thread-order.json`); thread/week agents finish via `submit_*` tools; **continue on thread failure** (still serial); never write root `index.md` or `W/.complete` until **all** expected `thread/*.md` exist **and** week overview succeeds; exit non-zero on any failure. Re-run reuses order file when valid, executes only missing thread files + overview. **Do not run overview** if any expected thread file is missing. Ordering failure aborts before new thread sessions. | Single consistent resume model; no hollow weeks; no premature “published” state. |
 | KD4 | **ID policy**: `normalize_message_id` = trim whitespace (keep angle brackets as-is after trim). Every in-memory `EmailMeta` **must** retain both `message_id` (canonical normalized, all external use) and `message_id_raw` (exact SQLite PRIMARY KEY for body SQL). **Single keying contract for all of `EmailIndex`:** (1) external/agent/file ids = always normalized; (2) body `HashMap` keys from `load_all_bodies` = always **normalized** (so `compose_thread_text`’s `bodies.get(&msg.message_id)` works); (3) SQL `WHERE message_id = ?` = always `message_id_raw`. Lookups/tools/roots/front matter use normalized only. `file_stem_for_id` percent-encodes the normalized id, or `sha256` lowercase hex if encoded length > 200 (`sha2`). Collision: one map entry per normalized id; earliest-by-date wins; keep winner’s `message_id_raw`. **`build-db` does not rewrite historical PKs.** CLI `grep` needs no call-site changes beyond these internals. | Fixes leading-space corpus footgun without breaking SQL or grepping empty bodies. |
-| KD5 | **Messages in a week directory**: only messages whose `date` is in the half-open week window. Historical parents via tools / prior summaries, not bulk-copied. | Keeps week artifacts proportional to activity. |
+| KD5 | **No message files on disk**: in-window messages are selected for agents only. Cleaned bodies load from DB into tool results / prompts. Published thread files list messages as **lore links**, not local paths. | Avoids duplicating the public archive; lore is canonical. |
 | KD6 | **Prior summaries**: host pre-globs and injects last **N=3** **cross-week** prior `*/thread/<stem>.md` paths into the thread user message. Additionally, for serial same-week work, host injects paths to **already-written same-week** `W/thread/<stem>.md` files that the ordering agent marked as prerequisites (or all same-week threads earlier in the order — see Step 6b). `GlobOutputs` / `ReadOutputFile` still available. Never rewrite prior week files. Continuity applies only to **new-layout** history (not `../infer`). | Multi-week + same-week dependency continuity without flooding the prompt. |
 | KD7 | **LLM client**: da-harness `OpenAIClient::with_config(LLMConfig { … })` from `config.openai`. Pin **git rev** (not floating branch only). Delete unused `openai_client.rs` in PR7. | Reproducible builds; typed tools + agent loop. |
 | KD8 | **Active thread set**: any thread with ≥1 message in the week window (root via normalized `thread_root_id`). Same thread-root rules as today; activity is calendar-window based (stricter/clearer than legacy rolling 7-day cutoff in `process_threads`). | Product week semantics. |
@@ -128,7 +129,8 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 | KD16 | **Overview re-run**: if `.complete` absent and all expected thread files present → **always** re-run week overview and may rewrite `W/index.md`; write root index then `.complete` last (fsync). | Partial overview failure is recoverable. |
 | KD17 | **Week agent tools**: `GlobOutputs`, `GrepOutputs`, `ReadOutputFile`, `SubmitWeekOverview` only (no mail tools). Host provides the full thread list + paths in the user message. | Overview should not re-research mail; cheaper and focused. |
 | KD18 | **Root index one-liner**: use `SubmitWeekOverview.headline` (required field). Empty-week stub uses a fixed headline (“No activity”). | No brittle heading parse. |
-| KD19 | **Citations**: relative markdown links only (`../messages/<stem>.md`, `thread/<stem>.md`). Host may post-process leftover `id://` if any. | Matches output tree; works offline. |
+| KD19 | **Citations**: messages → absolute lore URLs via `lore_url_for_message_id(lore_base_url, id)` (strip `<>` from normalized Message-ID). Same-week / cross-week **summaries** → relative `thread/<stem>.md` links. Host may post-process leftover `id://` into lore. | Public archive is lore; summaries stay local. |
+| KD25 | **`lore_base_url`**: config default `https://lore.kernel.org/linux-nfs/`. Example: Message-ID `<20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>` → `https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/`. | Matches public lore path convention. |
 | KD20 | **GrepEmails defaults**: when `focus_thread_root` is set and agent omits dates, default date window to current week; hard cap bodies scanned (200) and matches (50). Cross-thread override allowed but more aggressively capped (e.g. 20 matches). | 143k corpus must not thrash. |
 | KD21 | **Submit payload channel**: `Mutex<Option<Payload>>` or `mpsc`; double-submit returns tool error `"already submitted"`. | Aligns with harness stop pattern; no oneshot double-fire panic. |
 | KD22 | **Path sandbox**: reject absolute paths and `..` components; canonicalize `outputs_path` once at start; existing files: canonicalize + prefix check; missing → clear tool error (do not require canonicalize of missing paths). | Unix `canonicalize` existence footgun. |
@@ -157,7 +159,7 @@ flowchart TB
     SEL[Select active threads]
     EMP{Empty week?}
     STUB[Stub index + .complete + root]
-    WM[Write messages/*.md]
+    PREP[Select active threads / empty stub]
     ORD[Ordering multi_tool agent]
     TA[Serial per-thread multi_tool sessions]
     GATE{All thread files OK?}
@@ -173,7 +175,7 @@ flowchart TB
 
   CFG --> LOCK --> RW --> VAL --> IDX --> SEL --> EMP
   EMP -->|yes| STUB
-  EMP -->|no| WM --> ORD --> TA --> GATE
+  EMP -->|no| PREP --> ORD --> TA --> GATE
   GATE -->|no| FAIL
   GATE -->|yes| WA --> ROOT
   ORD --> TOOLS
@@ -200,9 +202,10 @@ For week ending **2026-07-20** (`W = 2026-07-20`):
     index.md                        # week overview + thread list with links
     thread/
       <file_stem_for_id(root)>.md   # per-thread summary for this week
-    messages/
-      <file_stem_for_id(msg)>.md    # raw message (cleaned body)
+                                  # (message citations → lore URLs, not local files)
 ```
+
+There is **no** `messages/` directory. Cleaned bodies remain in SQLite for `GetEmail` / greps only.
 
 **Prior-week discovery:**
 
@@ -378,7 +381,8 @@ Add to `Cargo.toml` in PR1: `sha2 = "0.10"` (or current compatible).
 | Body SQL bind | `" <abc@def.com>"` (= `message_id_raw`) |
 | Front matter / tool result `message_id` | `"<abc@def.com>"` |
 | `file_stem_for_id` | `%3Cabc%40def.com%3E` |
-| On-disk file | `messages/%3Cabc%40def.com%3E.md` |
+| Lore URL | `https://lore.kernel.org/linux-nfs/abc@def.com/` |
+| On-disk (thread only) | `thread/%3Cabc%40def.com%3E.md` when root is this id |
 
 Uniqueness is on the **normalized** form. Hash-stem case: front matter still holds full normalized id (not the raw PK); agents never need `message_id_raw`.
 
@@ -469,7 +473,7 @@ sequenceDiagram
     Host->>FS: mkdir W; stub index.md; root index; fsync; .complete
     Host-->>CLI: exit 0
   end
-  Host->>FS: write messages/*.md
+  Note over Host: cleaned bodies stay in DB for tools; no message files on disk
   alt no valid .thread-order.json
     Host->>Agent: ordering session 10m timeout
     Agent->>LLM: research deps / related subjects
@@ -518,7 +522,7 @@ for (idx, msg) in index.emails().iter().enumerate() {
 
 **If `active` is empty (KD11):**
 
-1. `mkdir -p W/thread W/messages` (messages may stay empty).
+1. `mkdir -p W/thread`.
 2. Write `W/index.md`:
 
 ```markdown
@@ -538,28 +542,27 @@ No messages in the database fell within the UTC window
 4. fsync relevant files; write `W/.complete`.
 5. Exit 0.
 
-#### Step 5: Write message files (deterministic)
+#### Step 5: Message handling (no on-disk archive)
 
-For each in-window message (index already collision-folded by earliest date):
+- **Do not** write per-message markdown under `outputs_path`.
+- In-window messages are selected for agents; bodies loaded via `EmailIndex::load_body` (raw PK) **only when tools / prompts need them**.
+- Host-built message lists in `thread/*.md` use lore links:
 
 ```markdown
----
-message_id: "<normalized id>"
-subject: "..."
-from: "..."
-date: "2026-07-18T12:34:56+00:00"
-in_reply_to: "..."   # optional, normalized if present
-thread_root_id: "..."  # normalized
-file_stem: "%3C...%3E"  # or 64-char lowercase sha256 when long
----
+## Messages this week
 
-<body — load via message_id_raw SQL bind; already clean_email_body'd at ingest>
+- [2026-07-18 Alice — subject](https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/)
 ```
 
-Path: `{outputs_path}/{W}/messages/{file_stem_for_id(msg.message_id)}.md`  
-Body: `load_body(pool, index, &msg.message_id)` → resolves to `WHERE message_id = msg.message_id_raw`.
+URL construction (`src/lore.rs`):
 
-Idempotent overwrite OK. Body load failures: log + count; v1 fail the run if any body required for an in-window message cannot be loaded (data integrity).
+```rust
+// normalize → strip <> → join lore_base_url
+// e.g. " <id@x>" → "https://lore.kernel.org/linux-nfs/id@x/"
+fn lore_url_for_message_id(lore_base: &str, message_id: &str) -> String;
+```
+
+Config: `lore_base_url` (default `https://lore.kernel.org/linux-nfs/`).
 
 #### Step 6a: Ordering agent (KD2, KD14)
 
@@ -616,7 +619,7 @@ For each `root_id` in order:
 2. Host globs **cross-week** prior summaries; injects last **N=3** paths into the user message (KD6).
 3. Host also injects **same-week predecessors already on disk**: every `W/thread/<stem>.md` for roots **earlier in the order** that already exist (from this run or a previous partial run). Prefer listing those the ordering notes marked as related when notes exist; otherwise list all earlier same-week files (cap e.g. 10 paths with a note that more exist via GlobOutputs).
 4. Run multi_tool session with **15 minute** timeout (see Session lifecycle). Fresh session per thread (no shared conversation history across threads).
-5. On successful submit → write thread file (host wraps agent body + host-built message list). Later sessions may `ReadOutputFile` this path.
+5. On successful submit → write thread file (host wraps agent body + host-built **lore-linked** message list). Later sessions may `ReadOutputFile` this path.
 6. On failure/timeout → **do not** write thread file; push `root_id` to `failed_thread_ids`; **continue** to the next root in order (still serial).
 
 After the loop:
@@ -641,15 +644,15 @@ prior_summaries:
 
 ## Summary
 
-<agent markdown — relative links only>
+<agent markdown — lore URLs for messages; relative links for thread summaries>
 
 ## Messages this week
 
-- [2026-07-18 From Name — subject](../messages/<stem>.md)
+- [2026-07-18 From Name — subject](https://lore.kernel.org/linux-nfs/<bare-message-id>/)
 - ...
 ```
 
-Message list is **host-generated**. Agent narrative uses **relative markdown links only** (KD19).
+Message list is **host-generated** with lore URLs (KD19/KD25). Agent narrative cites messages via lore URLs and other threads via relative `thread/<stem>.md` links.
 
 #### Step 7: Week overview agent (KD16, KD17)
 
@@ -886,7 +889,7 @@ Tests: `../`, absolute `/etc/passwd`, symlink escape if feasible, missing file c
 - Technical journalist for Linux NFS (tone ~ legacy / `../infer`).
 - Scope: this week’s developments in the focused thread; use tools; read host-listed prior summaries first (cross-week and same-week predecessors).
 - Use Message-IDs **exactly as returned** by `ListThreadMessages` / `GetEmail` (already normalized).
-- Cite only with **relative markdown links** to `../messages/<file_stem>.md` and same-week `../thread/<stem>.md` when referring to other discussions already summarized this week.
+- Cite messages with **lore URLs** (`lore_base_url` + bare Message-ID). Cite same-week / prior **thread summaries** with relative `thread/<stem>.md` (or `../thread/` as appropriate).
 - Bridge prior weeks briefly; focus on new content.
 - Call `SubmitThreadSummary` exactly once when done.
 
@@ -997,6 +1000,7 @@ Exit codes:
 db_path = ".git/db.sqlite"
 git_repo_path = "/path/to/linux-nfs.git"
 base_url = "/"
+lore_base_url = "https://lore.kernel.org/linux-nfs/"
 outputs_path = "/path/to/weekly-outputs"   # required for summarize-week
 
 [openai]
@@ -1008,9 +1012,11 @@ api_key = "..."
 ### Rust helpers (crate-internal)
 
 - `ids::{normalize_message_id, file_stem_for_id, percent_encode_id, sha256_hex_lower}` (+ `sha2` dep)
-- `week::{resolve_week, week_window, assert_week_ended, write_root_index, write_complete_marker, load_or_validate_thread_order}`
+- `lore::{lore_url_for_message_id, lore_markdown_link, DEFAULT_LORE_BASE}`
+- `week::{resolve_week, week_window, assert_week_ended, …}`
 - `email_index::{thread_root_id, EmailMeta::{message_id, message_id_raw}, load_body via raw PK}`
 - `agent::run_session` (serial host orchestration only; no fan-out of thread agents)
+- Cleaned bodies: inference tools only — never archived under `outputs_path`
 
 ### Removed / deprecated
 
@@ -1040,9 +1046,8 @@ Optional later: migrate PKs to trimmed form in `build-db` — out of scope; woul
 
 | Artifact | Writer | Mutable? |
 |---|---|---|
-| `W/messages/*.md` | Host | Overwrite OK any re-run of W (deterministic) |
 | `W/.thread-order.json` | Host after `SubmitThreadOrder` | Written once per incomplete week; reuse on resume if still a valid permutation of expected set; may delete to force re-order while `.complete` absent |
-| `W/thread/*.md` | Host after submit | **No rewrite once present** (resume skips); absent on failure |
+| `W/thread/*.md` | Host after submit | **No rewrite once present** (resume skips); absent on failure; message list uses lore URLs |
 | `W/index.md` | Host after overview/stub | Rewritable while `.complete` **absent** |
 | `W/.complete` | Host last | Presence ⇒ week immutable for v1 (order file may remain as historical) |
 | `index.md` (root) | Host | Regenerated when a week completes |
@@ -1262,12 +1267,12 @@ Incremental, each PR independently reviewable and mergeable.
   - Call sites in `grep_cmd.rs` unchanged aside from compiling against updated `EmailIndex` internals.
   - Week matrix / long-id hash / collision unit tests as already listed.
 
-### PR2 — Deterministic message materialization + empty-week stub paths
+### PR2 — Week layout + empty stubs + lore helpers (no message files)
 
-- **Title:** `feat: write weekly messages/*.md and empty-week stub layout`
-- **Files/components:** `src/outputs.rs`, `src/main.rs` (messages-only / dry path), `src/config.rs`, **fixture SQLite** with leading-space Message-IDs
+- **Title:** `feat: week layout, empty stubs, lore URL helpers (no message markdown)`
+- **Files/components:** `src/outputs.rs`, `src/lore.rs`, `src/summarize.rs`, `src/main.rs`, `src/config.rs` (`lore_base_url`)
 - **Dependencies:** PR1
-- **Description:** Materialize in-window messages via raw-PK body load + normalized front matter; empty-week stub helper. Fixture proves end-to-end “space PK → file on disk.”
+- **Description:** Empty-week stub + complete; non-empty week selects active threads without writing bodies. `lore_url_for_message_id` for citations. Cleaned bodies remain DB-only for inference.
 
 ### PR3 — Pure mail tool handlers + fixture tests (no da-harness)
 
@@ -1315,4 +1320,4 @@ Incremental, each PR independently reviewable and mergeable.
 
 ---
 
-*End of design document (rev 5 — serial ordered thread agents).*
+*End of design document (rev 6 — lore links; no message markdown on disk).*
