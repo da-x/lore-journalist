@@ -3,7 +3,7 @@
 use super::ToolCtx;
 use crate::email_index::thread_root_id;
 use crate::ids::normalize_message_id;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 
@@ -36,9 +36,7 @@ pub async fn search_related_threads(
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).max(1);
     let query_tokens = subject_tokens(subject);
     if query_tokens.is_empty() {
-        return Ok(
-            "SearchRelatedThreads: no usable tokens after normalizing subject.\n".into(),
-        );
+        return Ok("SearchRelatedThreads: no usable tokens after normalizing subject.\n".into());
     }
 
     let mut by_root: HashMap<String, RootAgg> = HashMap::new();
@@ -70,7 +68,10 @@ pub async fn search_related_threads(
 
     let mut scored: Vec<(usize, String, String, DateTime<Utc>)> = Vec::new();
     for (root, agg) in &by_root {
-        let score = query_tokens.iter().filter(|t| agg.tokens.contains(*t)).count();
+        let score = query_tokens
+            .iter()
+            .filter(|t| agg.tokens.contains(*t))
+            .count();
         if score == 0 {
             continue;
         }
@@ -86,7 +87,9 @@ pub async fn search_related_threads(
 
     let mut out = format!(
         "SearchRelatedThreads query_subject={:?} tokens={:?} hits={}\n\n",
-        subject, query_tokens, scored.len()
+        subject,
+        query_tokens,
+        scored.len()
     );
     if scored.is_empty() {
         out.push_str("(no related threads)\n");
@@ -228,9 +231,13 @@ mod tests {
 
         assert!(out.contains("root_id=<t1@x>") || out.contains("root_id=<t2@x>"));
         // Unrelated bakeathon should not outrank hang threads
-        if let (Some(p_hang), Some(p_unrel)) = (out.find("t1@x").or(out.find("t2@x")), out.find("t3@x"))
+        if let (Some(p_hang), Some(p_unrel)) =
+            (out.find("t1@x").or(out.find("t2@x")), out.find("t3@x"))
         {
-            assert!(p_hang < p_unrel, "related should rank above unrelated: {out}");
+            assert!(
+                p_hang < p_unrel,
+                "related should rank above unrelated: {out}"
+            );
         }
     }
 

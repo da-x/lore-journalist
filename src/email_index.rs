@@ -131,18 +131,14 @@ impl EmailIndex {
     #[allow(dead_code)]
     pub fn get(&self, message_id: &str) -> Option<&EmailMeta> {
         let key = normalize_message_id(message_id);
-        self.by_message_id
-            .get(&key)
-            .map(|&idx| &self.emails[idx])
+        self.by_message_id.get(&key).map(|&idx| &self.emails[idx])
     }
 
     /// The email this message replies to, if parent is present in the index.
     #[allow(dead_code)]
     pub fn replies_to(&self, message_id: &str) -> Option<&EmailMeta> {
         let key = normalize_message_id(message_id);
-        self.replies_to
-            .get(&key)
-            .map(|&idx| &self.emails[idx])
+        self.replies_to.get(&key).map(|&idx| &self.emails[idx])
     }
 
     pub fn len(&self) -> usize {
@@ -229,12 +225,10 @@ impl EmailIndex {
     /// On normalized-id collision, earliest-by-date wins (`ORDER BY date`, first insert kept).
     /// Prefer [`Self::load_body`] when you need the index winner's raw PK path.
     pub async fn load_all_bodies(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query!(
-            r#"SELECT message_id, body AS "body!" FROM emails ORDER BY date"#
-        )
-        .fetch_all(pool)
-        .await
-        .context("Failed to load email bodies")?;
+        let rows = sqlx::query!(r#"SELECT message_id, body AS "body!" FROM emails ORDER BY date"#)
+            .fetch_all(pool)
+            .await
+            .context("Failed to load email bodies")?;
 
         let mut bodies = HashMap::with_capacity(rows.len());
         for row in rows {
@@ -301,7 +295,9 @@ mod tests {
     use chrono::TimeZone;
 
     async fn pool_with_schema() -> SqlitePool {
-        crate::db::open_in_memory().await.expect("in-memory db + migrations")
+        crate::db::open_in_memory()
+            .await
+            .expect("in-memory db + migrations")
     }
 
     async fn insert_email(
@@ -357,10 +353,7 @@ mod tests {
 
         // Flexible id forms.
         let body_norm = index.load_body(&pool, "<id@example.com>").await.unwrap();
-        let body_raw = index
-            .load_body(&pool, " <id@example.com>")
-            .await
-            .unwrap();
+        let body_raw = index.load_body(&pool, " <id@example.com>").await.unwrap();
         assert_eq!(body_norm, "body-one\n");
         assert_eq!(body_raw, "body-one\n");
 

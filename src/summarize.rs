@@ -1,27 +1,32 @@
 //! Host-side weekly pipeline: empty stubs, ordering, serial thread agents, overview, complete.
 
 use crate::agent::order::obtain_thread_order;
+use crate::agent::session::{
+    SessionFailReason, UsageSnapshot, UsageTotals, classify_session_error,
+};
 use crate::agent::thread::run_thread_agent;
 use crate::agent::week::{all_thread_files_present, run_week_overview_and_finalize};
-use crate::email_index::{thread_root_id, EmailIndex, EmailMeta};
+use crate::email_index::{EmailIndex, EmailMeta, thread_root_id};
 use crate::lock::SummarizeLock;
 use crate::outputs::{
-    complete_marker_path, ensure_week_layout, thread_markdown_path, week_index_path,
-    write_complete_marker, write_empty_week_index, write_root_index, RootIndexEntry,
+    RootIndexEntry, complete_marker_path, ensure_week_layout, thread_markdown_path,
+    week_index_path, write_complete_marker, write_empty_week_index, write_root_index,
 };
 use crate::tools::ToolCtx;
 use crate::week::{
-    assert_week_ended, resolve_week_from_outputs, scan_week_dirs, week_window, ResolveWeekOutcome,
+    ResolveWeekOutcome, assert_week_ended, resolve_week_from_outputs, scan_week_dirs, week_window,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
-use da_harness::multi_tool::InferenceCallback;
 use da_harness::OpenAIClient;
+use da_harness::multi_tool::InferenceCallback;
+use indicatif::{ProgressBar, ProgressStyle};
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, info, warn};
 
 /// One active thread for the week (in-window message indices into the index).
@@ -119,7 +124,7 @@ pub async fn materialize_week(
 
     let active = select_active_threads(index, week);
     if active.is_empty() {
-        info!(%week, "no messages in week window; writing empty stub");
+        info!(%week, summarize_empty_week = true, "no messages in week window; writing empty stub");
         write_empty_week_stub(outputs_path, week)?;
         return Ok(MaterializeResult::EmptyWeekComplete { week });
     }
@@ -176,10 +181,7 @@ fn root_entries_for_complete_weeks(
         } else {
             read_week_headline(outputs_path, w).unwrap_or_else(|| "…".to_string())
         };
-        entries.push(RootIndexEntry {
-            week: w,
-            headline,
-        });
+        entries.push(RootIndexEntry { week: w, headline });
     }
     Ok(entries)
 }
@@ -222,6 +224,40 @@ impl Default for AgentRunOpts {
     }
 }
 
+fn log_summarize_metrics(
+    week: NaiveDate,
+    duration_ms: u128,
+    threads_total: usize,
+    threads_skipped: usize,
+    threads_failed: usize,
+    empty_week: bool,
+    usage: &UsageTotals,
+) {
+    let UsageSnapshot {
+        prompt,
+        completion,
+        total,
+        order,
+        thread,
+        week: tokens_week,
+    } = usage.snapshot();
+    info!(
+        summarize_week = %week,
+        summarize_threads_total = threads_total,
+        summarize_threads_skipped = threads_skipped,
+        summarize_threads_failed = threads_failed,
+        summarize_tokens_prompt = prompt,
+        summarize_tokens_completion = completion,
+        summarize_tokens_total = total,
+        summarize_tokens_order = order,
+        summarize_tokens_thread = thread,
+        summarize_tokens_week = tokens_week,
+        summarize_duration_ms = duration_ms,
+        summarize_empty_week = empty_week,
+        "summarize-week metrics"
+    );
+}
+
 /// Full CLI entry for `summarize-week` (holds exclusive flock for the whole run).
 pub async fn run_summarize_week(
     pool: &SqlitePool,
@@ -231,6 +267,9 @@ pub async fn run_summarize_week(
     lore_base_url: &str,
     opts: AgentRunOpts,
 ) -> Result<MaterializeResult> {
+    let started = Instant::now();
+    let usage = UsageTotals::new();
+
     if !outputs_path.exists() {
         fs::create_dir_all(outputs_path)
             .with_context(|| format!("create outputs_path {}", outputs_path.display()))?;
@@ -242,20 +281,28 @@ pub async fn run_summarize_week(
     let outcome = resolve_week_from_outputs(outputs_path, week, start_week)?;
     let w = match outcome {
         ResolveWeekOutcome::AlreadyComplete(w) => {
-            info!(%w, "week already complete");
+            info!(summarize_week = %w, "week already complete");
+            log_summarize_metrics(w, started.elapsed().as_millis(), 0, 0, 0, false, &usage);
             return Ok(MaterializeResult::AlreadyComplete { week: w });
         }
         ResolveWeekOutcome::Process(w) => w,
     };
 
+    info!(summarize_week = %w, "week resolved");
     assert_week_ended(w)?;
 
     info!("Loading email index for week ending {w}");
     let index = EmailIndex::load(pool).await?;
     let prep = materialize_week(pool, &index, outputs_path, w).await?;
     match &prep {
-        MaterializeResult::EmptyWeekComplete { .. }
-        | MaterializeResult::AlreadyComplete { .. } => return Ok(prep),
+        MaterializeResult::EmptyWeekComplete { week } => {
+            log_summarize_metrics(*week, started.elapsed().as_millis(), 0, 0, 0, true, &usage);
+            return Ok(prep);
+        }
+        MaterializeResult::AlreadyComplete { week } => {
+            log_summarize_metrics(*week, started.elapsed().as_millis(), 0, 0, 0, false, &usage);
+            return Ok(prep);
+        }
         MaterializeResult::WeekPrepared { .. } => {}
         MaterializeResult::AgentsFinished { .. } => return Ok(prep),
     }
@@ -264,10 +311,21 @@ pub async fn run_summarize_week(
         return Ok(prep);
     }
 
-    run_agents_for_week(pool, &index, outputs_path, w, lore_base_url, opts).await
+    run_agents_for_week(
+        pool,
+        &index,
+        outputs_path,
+        w,
+        lore_base_url,
+        opts,
+        usage,
+        started,
+    )
+    .await
 }
 
 /// Ordering + serial thread agents + week overview + `.complete` when all succeed.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agents_for_week(
     pool: &SqlitePool,
     index: &EmailIndex,
@@ -275,6 +333,8 @@ pub async fn run_agents_for_week(
     week: NaiveDate,
     lore_base_url: &str,
     opts: AgentRunOpts,
+    usage: UsageTotals,
+    started: Instant,
 ) -> Result<MaterializeResult> {
     ensure_week_layout(outputs_path, week)?;
     let active = select_active_threads(index, week);
@@ -292,15 +352,37 @@ pub async fn run_agents_for_week(
     )
     .with_lore_base(lore_base_url);
 
-    let order = obtain_thread_order(
+    let order = match obtain_thread_order(
         ctx.clone(),
         week,
         &active,
         opts.client.clone(),
         opts.order_inference.clone(),
+        usage.clone(),
     )
     .await
-    .context("obtain thread order")?;
+    {
+        Ok(order) => order,
+        Err(e) => {
+            error!(
+                summarize_week = %week,
+                ordering_failed = true,
+                error = %e,
+                error_debug = ?e,
+                "ordering agent failed"
+            );
+            log_summarize_metrics(
+                week,
+                started.elapsed().as_millis(),
+                active.len(),
+                0,
+                0,
+                false,
+                &usage,
+            );
+            return Err(e).context("obtain thread order");
+        }
+    };
 
     let by_root: BTreeMap<_, _> = active
         .iter()
@@ -308,52 +390,98 @@ pub async fn run_agents_for_week(
         .collect();
 
     let total = order.len();
-    let mut failed_thread_ids = Vec::new();
+    let mut failed: Vec<(String, SessionFailReason)> = Vec::new();
     let mut threads_ok = 0usize;
+    let mut threads_skipped = 0usize;
+
+    let pb = ProgressBar::new(total as u64);
+    if let Ok(style) = ProgressStyle::with_template(
+        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} threads {msg}",
+    ) {
+        pb.set_style(style.progress_chars("=>-"));
+    }
 
     for (i, root) in order.iter().enumerate() {
+        let position = i + 1;
         let Some(thread) = by_root.get(root) else {
             warn!(%root, "ordered root missing from active set; skipping");
-            failed_thread_ids.push(root.clone());
+            failed.push((root.clone(), SessionFailReason::Missing));
+            pb.inc(1);
             continue;
         };
         if thread_markdown_path(outputs_path, week, root).is_file() {
+            info!(root = %root, position, total, "thread skip");
             threads_ok += 1;
+            threads_skipped += 1;
+            pb.inc(1);
             continue;
         }
 
+        info!(root = %root, position, total, "thread start");
+        pb.set_message(format!("{position}/{total}"));
         let result = run_thread_agent(
             ctx.clone(),
             week,
             thread,
             index.as_ref(),
             &order,
-            i + 1,
+            position,
             total,
             opts.client.clone(),
             opts.thread_inference.clone(),
+            usage.clone(),
         )
         .await;
 
         match result {
-            Ok(_) => threads_ok += 1,
+            Ok(_) => {
+                info!(root = %root, "thread end");
+                threads_ok += 1;
+            }
             Err(e) => {
-                // Include the full error chain in logs — timeouts vs missing submit
-                // are otherwise hard to distinguish from the final bail alone.
-                error!(root = %root, error = %e, error_debug = ?e, "thread agent failed");
-                failed_thread_ids.push(root.clone());
+                let reason = classify_session_error(&e);
+                error!(
+                    root = %root,
+                    reason = reason.as_str(),
+                    error = %e,
+                    error_debug = ?e,
+                    "thread agent failed"
+                );
+                failed.push((root.clone(), reason));
             }
         }
+        pb.inc(1);
     }
+    pb.finish_and_clear();
 
-    let threads_failed = failed_thread_ids.len();
-    info!(%week, threads_ok, threads_failed, "thread agents finished");
+    let threads_failed = failed.len();
+    let failed_thread_ids: Vec<String> = failed.iter().map(|(id, _)| id.clone()).collect();
+    let failed_reasons: Vec<&'static str> = failed.iter().map(|(_, r)| r.as_str()).collect();
+    info!(
+        %week,
+        threads_ok,
+        threads_skipped,
+        threads_failed,
+        "thread agents finished"
+    );
 
     // KD12: no overview / no .complete unless every expected thread file exists.
     if threads_failed > 0 || !all_thread_files_present(outputs_path, week, &order) {
-        warn!(?failed_thread_ids, "failed_thread_ids");
+        warn!(?failed_thread_ids, ?failed_reasons, "failed_thread_ids");
+        log_summarize_metrics(
+            week,
+            started.elapsed().as_millis(),
+            total,
+            threads_skipped,
+            threads_failed,
+            false,
+            &usage,
+        );
+        let failed_detail: Vec<String> =
+            failed.iter().map(|(id, r)| format!("{id} ({r})")).collect();
         bail!(
-            "thread agents incomplete: failed={threads_failed} ids={failed_thread_ids:?}; \
+            "thread agents incomplete: failed={threads_failed} \
+             failed_thread_ids={failed_detail:?}; \
              overview and .complete withheld (re-run summarize-week to resume missing threads)"
         );
     }
@@ -366,9 +494,20 @@ pub async fn run_agents_for_week(
         &active,
         opts.client.clone(),
         opts.week_inference.clone(),
+        usage.clone(),
     )
     .await
     .context("week overview / finalize")?;
+
+    log_summarize_metrics(
+        week,
+        started.elapsed().as_millis(),
+        total,
+        threads_skipped,
+        0,
+        false,
+        &usage,
+    );
 
     let headline = read_week_headline(outputs_path, week);
     Ok(MaterializeResult::AgentsFinished {
@@ -535,7 +674,10 @@ mod tests {
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
 
         let result = materialize_week(&pool, &index, &out, w).await.unwrap();
-        assert!(matches!(result, MaterializeResult::EmptyWeekComplete { .. }));
+        assert!(matches!(
+            result,
+            MaterializeResult::EmptyWeekComplete { .. }
+        ));
 
         let index_md = week_index_path(&out, w);
         assert!(index_md.is_file());
@@ -559,10 +701,7 @@ mod tests {
     fn select_active_respects_half_open_window() {
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
         let (start, end) = week_window(w);
-        assert_eq!(
-            start,
-            Utc.with_ymd_and_hms(2026, 7, 14, 0, 0, 0).unwrap()
-        );
+        assert_eq!(start, Utc.with_ymd_and_hms(2026, 7, 14, 0, 0, 0).unwrap());
         assert_eq!(end, Utc.with_ymd_and_hms(2026, 7, 21, 0, 0, 0).unwrap());
     }
 
@@ -583,8 +722,13 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(matches!(result, MaterializeResult::EmptyWeekComplete { .. }));
-        assert!(complete_marker_path(&out, NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()).is_file());
+        assert!(matches!(
+            result,
+            MaterializeResult::EmptyWeekComplete { .. }
+        ));
+        assert!(
+            complete_marker_path(&out, NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()).is_file()
+        );
         let _ = fs::remove_dir_all(&out);
     }
 }

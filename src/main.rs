@@ -9,7 +9,6 @@ mod ids;
 mod lock;
 mod lore;
 mod models;
-mod openai_client;
 mod outputs;
 mod summarize;
 mod tools;
@@ -20,9 +19,7 @@ use crate::config::Config;
 use crate::db::open_db;
 use crate::email_index::EmailIndex;
 use crate::git_handler::GitHandler;
-use crate::summarize::{
-    require_outputs_path, run_summarize_week, AgentRunOpts, MaterializeResult,
-};
+use crate::summarize::{AgentRunOpts, MaterializeResult, require_outputs_path, run_summarize_week};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -96,13 +93,8 @@ async fn main() -> Result<()> {
             week,
             prepare_only,
         } => {
-            summarize_week_cmd(
-                config,
-                start_week.as_deref(),
-                week.as_deref(),
-                prepare_only,
-            )
-            .await?;
+            summarize_week_cmd(config, start_week.as_deref(), week.as_deref(), prepare_only)
+                .await?;
         }
     }
 

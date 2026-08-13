@@ -4,7 +4,7 @@ use super::ToolCtx;
 use crate::email_index::thread_root_id;
 use crate::ids::{file_stem_for_id, normalize_message_id};
 use crate::lore::lore_url_for_message_id;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 
 /// Arguments for ListThreadMessages.
@@ -125,13 +125,7 @@ mod tests {
         let pool = open_in_memory().await.unwrap();
         // Root + reply with leading-space PKs.
         for (mid, subj, date, irt, refs) in [
-            (
-                " <root@t>",
-                "Root",
-                "2026-07-15T10:00:00+00:00",
-                None,
-                "[]",
-            ),
+            (" <root@t>", "Root", "2026-07-15T10:00:00+00:00", None, "[]"),
             (
                 " <child@t>",
                 "Re: Root",

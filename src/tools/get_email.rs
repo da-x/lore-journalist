@@ -3,7 +3,7 @@
 use super::ToolCtx;
 use crate::ids::normalize_message_id;
 use crate::lore::lore_url_for_message_id;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Arguments for GetEmail (matches future schemars tool args).
 #[derive(Debug, Clone)]

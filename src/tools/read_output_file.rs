@@ -1,8 +1,8 @@
 //! `ReadOutputFile` pure handler.
 
-use super::paths::{relative_display, resolve_output_path};
 use super::ToolCtx;
-use anyhow::{bail, Context, Result};
+use super::paths::{relative_display, resolve_output_path};
+use anyhow::{Context, Result, bail};
 use std::fs;
 
 /// Max bytes returned to the model (design: 256 KiB).

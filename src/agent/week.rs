@@ -1,20 +1,20 @@
 //! Week overview agent + finalize week index / root catalog / `.complete`.
 
-use super::session::{run_until_submit, WEEK_AGENT_TIMEOUT};
+use super::session::{UsageStage, UsageTotals, WEEK_AGENT_TIMEOUT, run_until_submit};
 use super::tool_build::build_week_tools;
 use crate::ids::file_stem_for_id;
 use crate::outputs::{
-    complete_marker_path, root_index_path, thread_markdown_path, week_index_path, write_atomic,
-    write_complete_marker, write_root_index, yaml_double_quoted, RootIndexEntry,
+    RootIndexEntry, complete_marker_path, root_index_path, thread_markdown_path, week_index_path,
+    write_atomic, write_complete_marker, write_root_index, yaml_double_quoted,
 };
 use crate::summarize::ActiveThread;
-use crate::tools::submit::SubmitSlot;
 use crate::tools::ToolCtx;
+use crate::tools::submit::SubmitSlot;
 use crate::week::{scan_week_dirs, week_window};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
-use da_harness::multi_tool::InferenceCallback;
 use da_harness::OpenAIClient;
+use da_harness::multi_tool::InferenceCallback;
 use std::fs;
 use std::path::Path;
 use tracing::info;
@@ -70,10 +70,7 @@ pub fn build_week_user_message(
 }
 
 /// Host-built TOC appended after agent overview body.
-pub fn format_host_thread_toc(
-    ordered_roots: &[String],
-    by_subject: &[(String, String)],
-) -> String {
+pub fn format_host_thread_toc(ordered_roots: &[String], by_subject: &[(String, String)]) -> String {
     let mut s = String::from("\n## Discussions this week\n\n");
     for root in ordered_roots {
         let stem = file_stem_for_id(root);
@@ -180,6 +177,7 @@ pub fn finalize_week(
 }
 
 /// Run week overview agent and finalize (call only when all thread files exist).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_week_overview_and_finalize(
     ctx: ToolCtx,
     week: NaiveDate,
@@ -187,6 +185,7 @@ pub async fn run_week_overview_and_finalize(
     active: &[ActiveThread],
     client: Option<OpenAIClient>,
     inference: Option<InferenceCallback>,
+    usage: UsageTotals,
 ) -> Result<()> {
     if !all_thread_files_present(&ctx.outputs_path, week, ordered_roots) {
         bail!("cannot run week overview: missing thread/*.md files");
@@ -205,6 +204,7 @@ pub async fn run_week_overview_and_finalize(
     let tools = build_week_tools(ctx.clone(), slot.clone())?;
     let user = build_week_user_message(week, ordered_roots, &by_subject);
 
+    info!(%week, "overview start");
     let payload = run_until_submit(
         WEEK_SYSTEM,
         user,
@@ -213,9 +213,12 @@ pub async fn run_week_overview_and_finalize(
         WEEK_AGENT_TIMEOUT,
         client,
         inference,
+        usage,
+        UsageStage::Week,
     )
     .await
     .context("week overview agent")?;
+    info!(%week, "overview end");
 
     finalize_week(
         &ctx.outputs_path,

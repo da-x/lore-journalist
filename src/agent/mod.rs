@@ -9,5 +9,3 @@ pub mod week;
 
 #[cfg(test)]
 mod offline_tests;
-
-

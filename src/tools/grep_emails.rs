@@ -4,7 +4,7 @@ use super::ToolCtx;
 use crate::email_index::thread_root_id;
 use crate::ids::normalize_message_id;
 use crate::lore::lore_url_for_message_id;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
 
@@ -29,10 +29,11 @@ pub async fn grep_emails(ctx: &ToolCtx, args: GrepEmailsArgs) -> Result<String> 
     if args.pattern.is_empty() {
         bail!("pattern is required");
     }
-    let re = Regex::new(&args.pattern)
-        .with_context(|| format!("invalid regex: {}", args.pattern))?;
+    let re =
+        Regex::new(&args.pattern).with_context(|| format!("invalid regex: {}", args.pattern))?;
 
-    let (root_filter, using_focus_default) = resolve_root_filter(ctx, args.thread_root_id.as_deref());
+    let (root_filter, using_focus_default) =
+        resolve_root_filter(ctx, args.thread_root_id.as_deref());
     let focused = root_filter.is_some();
 
     // Date defaults: under focus (or explicit root) when dates omitted → week window (KD20).
@@ -110,9 +111,9 @@ pub async fn grep_emails(ctx: &ToolCtx, args: GrepEmailsArgs) -> Result<String> 
         let subject_line = format!("Subject: {}", m.subject);
         let mut hit_header = false;
 
-        for (kind, line) in std::iter::once(("subject", subject_line.as_str())).chain(
-            body.lines().map(|l| ("body", l)),
-        ) {
+        for (kind, line) in std::iter::once(("subject", subject_line.as_str()))
+            .chain(body.lines().map(|l| ("body", l)))
+        {
             if match_lines >= max_matches {
                 truncated_matches = true;
                 break;
@@ -149,10 +150,7 @@ pub async fn grep_emails(ctx: &ToolCtx, args: GrepEmailsArgs) -> Result<String> 
     Ok(out)
 }
 
-fn resolve_root_filter(
-    ctx: &ToolCtx,
-    explicit: Option<&str>,
-) -> (Option<String>, bool) {
+fn resolve_root_filter(ctx: &ToolCtx, explicit: Option<&str>) -> (Option<String>, bool) {
     if let Some(r) = explicit {
         let r = r.trim();
         if !r.is_empty() {
@@ -264,7 +262,10 @@ mod tests {
         .unwrap();
 
         assert!(out.contains("message_id=<a@t>"));
-        assert!(!out.contains("message_id=<c@t>"), "cross-thread should not match under focus");
+        assert!(
+            !out.contains("message_id=<c@t>"),
+            "cross-thread should not match under focus"
+        );
         assert!(out.contains("focused=true"));
     }
 

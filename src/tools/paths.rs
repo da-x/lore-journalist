@@ -1,6 +1,6 @@
 //! Path sandbox for output tools (KD22).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
 
 /// Resolve a relative path under `outputs_root` (must already be canonical when possible).
@@ -63,9 +63,9 @@ pub fn resolve_output_path(outputs_root: &Path, rel: &str) -> Result<PathBuf> {
         // Missing: ensure no symlink escape on parents that exist.
         if let Some(parent) = candidate.parent() {
             if parent.exists() {
-                let parent_canon = parent.canonicalize().with_context(|| {
-                    format!("canonicalize parent {}", parent.display())
-                })?;
+                let parent_canon = parent
+                    .canonicalize()
+                    .with_context(|| format!("canonicalize parent {}", parent.display()))?;
                 let root_canon = outputs_root
                     .canonicalize()
                     .with_context(|| format!("canonicalize root {}", outputs_root.display()))?;
@@ -80,8 +80,12 @@ pub fn resolve_output_path(outputs_root: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Relative path from outputs root for display (forward slashes).
 pub fn relative_display(outputs_root: &Path, absolute: &Path) -> String {
-    let root = outputs_root.canonicalize().unwrap_or_else(|_| outputs_root.to_path_buf());
-    let abs = absolute.canonicalize().unwrap_or_else(|_| absolute.to_path_buf());
+    let root = outputs_root
+        .canonicalize()
+        .unwrap_or_else(|_| outputs_root.to_path_buf());
+    let abs = absolute
+        .canonicalize()
+        .unwrap_or_else(|_| absolute.to_path_buf());
     abs.strip_prefix(&root)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| absolute.display().to_string())
@@ -93,7 +97,10 @@ pub fn path_glob_match(pattern: &str, rel_path: &str) -> bool {
     let rel_path = rel_path.trim_start_matches("./");
     glob_match_segments(
         &pattern.split('/').collect::<Vec<_>>(),
-        &rel_path.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>(),
+        &rel_path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>(),
     )
 }
 

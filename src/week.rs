@@ -1,6 +1,6 @@
 //! Calendar week windows and week-resolution matrix (design KD1, KD9, KD15).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Days, NaiveDate, Utc};
 use std::fs;
 use std::path::Path;
@@ -36,9 +36,7 @@ pub fn in_week_window(w: NaiveDate, t: DateTime<Utc>) -> bool {
 /// Fail if week ending `w` has not ended yet relative to `today` (UTC date).
 pub fn assert_week_ended_at(w: NaiveDate, today: NaiveDate) -> Result<()> {
     if today <= w {
-        bail!(
-            "week ending {w} has not ended yet (UTC today is {today}); cannot summarize"
-        );
+        bail!("week ending {w} has not ended yet (UTC today is {today}); cannot summarize");
     }
     Ok(())
 }
@@ -76,9 +74,7 @@ pub fn resolve_week(
 
     if let Some(w) = week {
         if start_week.is_some() {
-            warnings.push(
-                "--week takes precedence; ignoring --start-week".to_string(),
-            );
+            warnings.push("--week takes precedence; ignoring --start-week".to_string());
         }
         if complete.binary_search(&w).is_ok() {
             return Ok((ResolveWeekOutcome::AlreadyComplete(w), warnings));
@@ -214,10 +210,7 @@ mod tests {
     fn week_window_half_open_for_2026_07_20() {
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
         let (start, end_excl) = week_window(w);
-        assert_eq!(
-            start,
-            Utc.with_ymd_and_hms(2026, 7, 14, 0, 0, 0).unwrap()
-        );
+        assert_eq!(start, Utc.with_ymd_and_hms(2026, 7, 14, 0, 0, 0).unwrap());
         assert_eq!(
             end_excl,
             Utc.with_ymd_and_hms(2026, 7, 21, 0, 0, 0).unwrap()
@@ -264,32 +257,21 @@ mod tests {
 
     #[test]
     fn resolve_plus_seven_after_complete() {
-        let (out, _) =
-            resolve_week(None, None, vec![d(2026, 7, 13)], vec![]).unwrap();
+        let (out, _) = resolve_week(None, None, vec![d(2026, 7, 13)], vec![]).unwrap();
         assert_eq!(out, ResolveWeekOutcome::Process(d(2026, 7, 20)));
     }
 
     #[test]
     fn resolve_start_week_conflicts_with_chain() {
-        let err = resolve_week(
-            None,
-            Some(d(2026, 1, 1)),
-            vec![d(2026, 7, 13)],
-            vec![],
-        )
-        .unwrap_err();
+        let err =
+            resolve_week(None, Some(d(2026, 1, 1)), vec![d(2026, 7, 13)], vec![]).unwrap_err();
         assert!(err.to_string().contains("bootstrap-only"));
     }
 
     #[test]
     fn resolve_start_week_matching_next_ok() {
-        let (out, _) = resolve_week(
-            None,
-            Some(d(2026, 7, 20)),
-            vec![d(2026, 7, 13)],
-            vec![],
-        )
-        .unwrap();
+        let (out, _) =
+            resolve_week(None, Some(d(2026, 7, 20)), vec![d(2026, 7, 13)], vec![]).unwrap();
         assert_eq!(out, ResolveWeekOutcome::Process(d(2026, 7, 20)));
     }
 
@@ -308,21 +290,15 @@ mod tests {
 
     #[test]
     fn resolve_multiple_incomplete_errors() {
-        let err = resolve_week(
-            None,
-            None,
-            vec![],
-            vec![d(2026, 7, 6), d(2026, 7, 13)],
-        )
-        .unwrap_err();
+        let err =
+            resolve_week(None, None, vec![], vec![d(2026, 7, 6), d(2026, 7, 13)]).unwrap_err();
         assert!(err.to_string().contains("multiple incomplete"));
     }
 
     #[test]
     fn resolve_week_flag_already_complete() {
         let (out, _) =
-            resolve_week(Some(d(2026, 7, 13)), None, vec![d(2026, 7, 13)], vec![])
-                .unwrap();
+            resolve_week(Some(d(2026, 7, 13)), None, vec![d(2026, 7, 13)], vec![]).unwrap();
         assert_eq!(out, ResolveWeekOutcome::AlreadyComplete(d(2026, 7, 13)));
     }
 
@@ -336,14 +312,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, ResolveWeekOutcome::Process(d(2026, 7, 20)));
-        assert!(warnings.iter().any(|w| w.contains("--week takes precedence")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("--week takes precedence"))
+        );
     }
 
     #[test]
     fn resolve_week_flag_missing_dir() {
         let (out, _) =
-            resolve_week(Some(d(2026, 8, 3)), None, vec![d(2026, 7, 27)], vec![])
-                .unwrap();
+            resolve_week(Some(d(2026, 8, 3)), None, vec![d(2026, 7, 27)], vec![]).unwrap();
         assert_eq!(out, ResolveWeekOutcome::Process(d(2026, 8, 3)));
     }
 

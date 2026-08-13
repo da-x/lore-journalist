@@ -1,16 +1,16 @@
 //! Ordering agent: rank week's threads for serial summarization.
 
-use super::session::{run_until_submit, ORDER_AGENT_TIMEOUT};
+use super::session::{ORDER_AGENT_TIMEOUT, UsageStage, UsageTotals, run_until_submit};
 use super::tool_build::build_order_tools;
 use crate::ids::normalize_message_id;
 use crate::outputs::{thread_order_path, write_atomic};
 use crate::summarize::ActiveThread;
-use crate::tools::submit::{SubmitSlot, ThreadOrderPayload};
 use crate::tools::ToolCtx;
-use anyhow::{bail, Context, Result};
+use crate::tools::submit::{SubmitSlot, ThreadOrderPayload};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
-use da_harness::multi_tool::InferenceCallback;
 use da_harness::OpenAIClient;
+use da_harness::multi_tool::InferenceCallback;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -48,10 +48,9 @@ pub fn load_valid_thread_order(
     if !path.is_file() {
         return Ok(None);
     }
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let file: ThreadOrderFile = serde_json::from_str(&text)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let file: ThreadOrderFile =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     // Prefer strict reuse; fall back to repair if file is slightly dirty.
     match coerce_to_permutation(&file.ordered_root_ids, expected, &[]) {
         Ok((order, report)) => {
@@ -83,7 +82,12 @@ pub fn load_valid_thread_order(
                     warn!(%week, error = %e, "failed to rewrite repaired .thread-order.json");
                 }
             } else {
-                info!(%week, "reusing valid .thread-order.json");
+                info!(
+                    %week,
+                    ordered_root_ids = ?order,
+                    notes = ?file.notes,
+                    "reusing valid .thread-order.json"
+                );
             }
             Ok(Some(order))
         }
@@ -131,9 +135,7 @@ impl OrderRepairReport {
 
     /// Drops / appends (not mere whitespace/comma cleanup).
     pub fn structural_change(&self) -> bool {
-        !self.dropped_unknown.is_empty()
-            || self.dropped_duplicates > 0
-            || !self.appended.is_empty()
+        !self.dropped_unknown.is_empty() || self.dropped_duplicates > 0 || !self.appended.is_empty()
     }
 }
 
@@ -217,10 +219,7 @@ pub fn coerce_to_permutation(
 
 /// Strict validate: must already be a clean permutation (only whitespace normalize ok).
 #[allow(dead_code)] // used in tests / optional strict callers
-pub fn validate_permutation(
-    ordered: &[String],
-    expected: &HashSet<String>,
-) -> Result<Vec<String>> {
+pub fn validate_permutation(ordered: &[String], expected: &HashSet<String>) -> Result<Vec<String>> {
     let (order, report) = coerce_to_permutation(ordered, expected, &[])?;
     if report.structural_change() {
         bail!(
@@ -262,30 +261,38 @@ pub fn build_order_user_message(week: NaiveDate, active: &[ActiveThread]) -> Str
 }
 
 /// Run ordering agent (or return cached valid order).
+#[allow(clippy::too_many_arguments)]
 pub async fn obtain_thread_order(
     ctx: ToolCtx,
     week: NaiveDate,
     active: &[ActiveThread],
     client: Option<OpenAIClient>,
     inference: Option<InferenceCallback>,
+    usage: UsageTotals,
 ) -> Result<Vec<String>> {
     let expected: HashSet<String> = active.iter().map(|t| t.root_id.clone()).collect();
-    if let Some(order) =
-        load_valid_thread_order(&ctx.outputs_path, week, &expected)?
-    {
+    if let Some(order) = load_valid_thread_order(&ctx.outputs_path, week, &expected)? {
         return Ok(order);
     }
 
     if active.len() == 1 {
         let order = vec![active[0].root_id.clone()];
+        let notes = Some("single thread; skipped LLM order".into());
         write_thread_order_file(
             &ctx.outputs_path,
             week,
             &ThreadOrderPayload {
                 ordered_root_ids: order.clone(),
-                notes: Some("single thread; skipped LLM order".into()),
+                notes: notes.clone(),
             },
         )?;
+        info!(
+            %week,
+            n = 1,
+            ordered_root_ids = ?order,
+            notes = ?notes,
+            "wrote .thread-order.json"
+        );
         return Ok(order);
     }
 
@@ -303,6 +310,8 @@ pub async fn obtain_thread_order(
         ORDER_AGENT_TIMEOUT,
         client,
         inference,
+        usage,
+        UsageStage::Order,
     )
     .await
     .context("ordering agent")?;
@@ -330,7 +339,13 @@ pub async fn obtain_thread_order(
         notes,
     };
     write_thread_order_file(&ctx.outputs_path, week, &payload)?;
-    info!(%week, n = order.len(), "wrote .thread-order.json");
+    info!(
+        %week,
+        n = order.len(),
+        ordered_root_ids = ?order,
+        notes = ?payload.notes,
+        "wrote .thread-order.json"
+    );
     Ok(order)
 }
 
@@ -349,14 +364,13 @@ mod tests {
 
     #[test]
     fn coerce_repairs_trailing_commas_and_missing() {
-        let exp: HashSet<_> = ["<a>", "<b>", "<c>"].into_iter().map(String::from).collect();
+        let exp: HashSet<_> = ["<a>", "<b>", "<c>"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         let catalog = vec!["<a>".into(), "<b>".into(), "<c>".into()];
-        let (order, report) = coerce_to_permutation(
-            &["<b>,".into(), "<a>".into()],
-            &exp,
-            &catalog,
-        )
-        .unwrap();
+        let (order, report) =
+            coerce_to_permutation(&["<b>,".into(), "<a>".into()], &exp, &catalog).unwrap();
         assert_eq!(order, vec!["<b>", "<a>", "<c>"]);
         assert!(report.appended.contains(&"<c>".to_string()));
         assert!(!report.sanitized_from.is_empty() || order[0] == "<b>");
@@ -379,14 +393,13 @@ mod tests {
 
     #[test]
     fn strict_validate_rejects_incomplete() {
-        let exp: HashSet<_> = ["<a>", "<b>", "<c>"].into_iter().map(String::from).collect();
+        let exp: HashSet<_> = ["<a>", "<b>", "<c>"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         // validate_permutation fails if repair would be needed
         assert!(validate_permutation(&["<a>".into(), "<b>".into()], &exp).is_err());
-        let ok = validate_permutation(
-            &[" <b>".into(), "<a>".into(), "<c>".into()],
-            &exp,
-        )
-        .unwrap();
+        let ok = validate_permutation(&[" <b>".into(), "<a>".into(), "<c>".into()], &exp).unwrap();
         assert_eq!(ok, vec!["<b>", "<a>", "<c>"]);
     }
 }

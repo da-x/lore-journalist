@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Holds an exclusive non-blocking flock for the duration of a summarize run.
 /// Released on drop.
@@ -28,6 +28,12 @@ impl SummarizeLock {
             .open(&path)
             .with_context(|| format!("open lock file {}", path.display()))?;
         file.try_lock_exclusive().map_err(|e| {
+            warn!(
+                summarize_lock_busy = true,
+                path = %path.display(),
+                error = %e,
+                "could not acquire exclusive summarize-week lock"
+            );
             anyhow::anyhow!(
                 "another summarize-week is running (could not lock {}): {e}",
                 path.display()
@@ -36,7 +42,6 @@ impl SummarizeLock {
         info!(path = %path.display(), "acquired exclusive summarize-week lock");
         Ok(Self { _file: file, path })
     }
-
 }
 
 impl Drop for SummarizeLock {

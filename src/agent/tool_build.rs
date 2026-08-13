@@ -1,20 +1,18 @@
 //! Build da-harness `Tool` lists wrapping pure handlers.
 
-use crate::tools::get_email::{get_email, GetEmailArgs};
-use crate::tools::glob_outputs::{glob_outputs, GlobOutputsArgs};
-use crate::tools::grep_emails::{grep_emails, GrepEmailsArgs};
-use crate::tools::grep_outputs::{grep_outputs, GrepOutputsArgs};
-use crate::tools::list_thread_messages::{list_thread_messages, ListThreadMessagesArgs};
-use crate::tools::read_output_file::{read_output_file, ReadOutputFileArgs};
-use crate::tools::search_related_threads::{
-    search_related_threads, SearchRelatedThreadsArgs,
-};
-use crate::tools::submit::{
-    submit_thread_order, submit_thread_summary, submit_week_overview, SubmitSlot,
-    SubmitThreadOrder, SubmitThreadSummary, SubmitWeekOverview, ThreadOrderPayload,
-    ThreadSummaryPayload, WeekOverviewPayload,
-};
 use crate::tools::ToolCtx;
+use crate::tools::get_email::{GetEmailArgs, get_email};
+use crate::tools::glob_outputs::{GlobOutputsArgs, glob_outputs};
+use crate::tools::grep_emails::{GrepEmailsArgs, grep_emails};
+use crate::tools::grep_outputs::{GrepOutputsArgs, grep_outputs};
+use crate::tools::list_thread_messages::{ListThreadMessagesArgs, list_thread_messages};
+use crate::tools::read_output_file::{ReadOutputFileArgs, read_output_file};
+use crate::tools::search_related_threads::{SearchRelatedThreadsArgs, search_related_threads};
+use crate::tools::submit::{
+    SubmitSlot, SubmitThreadOrder, SubmitThreadSummary, SubmitWeekOverview, ThreadOrderPayload,
+    ThreadSummaryPayload, WeekOverviewPayload, submit_thread_order, submit_thread_summary,
+    submit_week_overview,
+};
 use anyhow::Result;
 use chrono::NaiveDate;
 use da_harness::multi_tool::Tool;
@@ -223,12 +221,7 @@ fn output_tools(ctx: ToolCtx) -> Result<Vec<Tool>> {
     let read = Tool::new(Arc::new(move |args: ReadOutputFile| {
         let ctx = c3.clone();
         async move {
-            match read_output_file(
-                &ctx,
-                ReadOutputFileArgs { path: args.path },
-            )
-            .await
-            {
+            match read_output_file(&ctx, ReadOutputFileArgs { path: args.path }).await {
                 Ok(s) => Ok(s),
                 Err(e) => Ok(format!("ERROR: {e:#}")),
             }
@@ -262,10 +255,7 @@ fn related_tool(ctx: ToolCtx) -> Result<Tool> {
 }
 
 /// Tools for the ordering agent.
-pub fn build_order_tools(
-    ctx: ToolCtx,
-    slot: SubmitSlot<ThreadOrderPayload>,
-) -> Result<Vec<Tool>> {
+pub fn build_order_tools(ctx: ToolCtx, slot: SubmitSlot<ThreadOrderPayload>) -> Result<Vec<Tool>> {
     let mut tools = mail_tools(ctx.clone())?;
     tools.extend(output_tools(ctx.clone())?);
     tools.push(related_tool(ctx)?);
@@ -296,10 +286,7 @@ pub fn build_thread_tools(
 }
 
 /// Tools for the week overview agent (outputs only + submit).
-pub fn build_week_tools(
-    ctx: ToolCtx,
-    slot: SubmitSlot<WeekOverviewPayload>,
-) -> Result<Vec<Tool>> {
+pub fn build_week_tools(ctx: ToolCtx, slot: SubmitSlot<WeekOverviewPayload>) -> Result<Vec<Tool>> {
     let mut tools = output_tools(ctx)?;
     let submit = Tool::new(Arc::new(move |args: SubmitWeekOverview| {
         let slot = slot.clone();

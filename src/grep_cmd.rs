@@ -36,11 +36,7 @@ pub async fn run_grep(pool: &SqlitePool, pattern: &str) -> Result<()> {
                 continue;
             }
             if !thread_header_printed {
-                writeln!(
-                    stdout,
-                    "\n=== {} ({}) ===",
-                    thread.subject, thread.root_id
-                )?;
+                writeln!(stdout, "\n=== {} ({}) ===", thread.subject, thread.root_id)?;
                 thread_header_printed = true;
                 match_threads += 1;
             }

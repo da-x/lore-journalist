@@ -80,13 +80,8 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
             .with_context(|| format!("write {}", tmp.display()))?;
         f.sync_all().ok();
     }
-    fs::rename(&tmp, path).with_context(|| {
-        format!(
-            "rename {} -> {}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }
 
@@ -179,7 +174,12 @@ pub fn write_complete_marker(outputs_path: &Path, w: NaiveDate) -> Result<()> {
 /// Host-built markdown list of messages for a thread file, linking to lore.
 pub fn format_message_list_lore(
     lore_base: &str,
-    items: &[(/* date label */ String, /* from */ String, /* subject */ String, /* message_id */ String)],
+    items: &[(
+        /* date label */ String,
+        /* from */ String,
+        /* subject */ String,
+        /* message_id */ String,
+    )],
 ) -> String {
     use crate::lore::lore_url_for_message_id;
     let mut out = String::from("## Messages this week\n\n");

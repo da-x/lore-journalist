@@ -1,8 +1,8 @@
 //! `GlobOutputs` pure handler.
 
-use super::paths::{path_glob_match, relative_display};
 use super::ToolCtx;
-use anyhow::{bail, Context, Result};
+use super::paths::{path_glob_match, relative_display};
+use anyhow::{Context, Result, bail};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,11 @@ pub async fn glob_outputs(ctx: &ToolCtx, args: GlobOutputsArgs) -> Result<String
     };
 
     let mut matches = Vec::new();
-    for entry in WalkDir::new(&root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if !entry.file_type().is_file() {
             continue;
         }

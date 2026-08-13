@@ -1,8 +1,8 @@
 //! SQLite pool setup and sqlx migrations.
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::ConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::str::FromStr;
 use tracing::info;
 

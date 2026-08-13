@@ -33,7 +33,6 @@ impl<T> SubmitSlot<T> {
     pub fn take(&self) -> Option<T> {
         self.inner.lock().expect("submit slot lock").take()
     }
-
 }
 
 /// Payload for `SubmitThreadOrder`.
@@ -147,12 +146,13 @@ mod tests {
     #[test]
     fn double_submit_rejected() {
         let slot = SubmitSlot::new();
-        assert!(slot
-            .try_submit(ThreadOrderPayload {
+        assert!(
+            slot.try_submit(ThreadOrderPayload {
                 ordered_root_ids: vec!["<a>".into()],
                 notes: None,
             })
-            .is_ok());
+            .is_ok()
+        );
         let err = slot
             .try_submit(ThreadOrderPayload {
                 ordered_root_ids: vec!["<b>".into()],

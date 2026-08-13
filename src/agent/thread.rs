@@ -1,6 +1,6 @@
 //! Per-thread summarization agent.
 
-use super::session::{run_until_submit, THREAD_AGENT_TIMEOUT};
+use super::session::{THREAD_AGENT_TIMEOUT, UsageStage, UsageTotals, run_until_submit};
 use super::tool_build::build_thread_tools;
 use crate::email_index::EmailIndex;
 use crate::ids::file_stem_for_id;
@@ -10,13 +10,13 @@ use crate::outputs::{
     yaml_double_quoted,
 };
 use crate::summarize::ActiveThread;
-use crate::tools::submit::{SubmitSlot, ThreadSummaryPayload};
 use crate::tools::ToolCtx;
+use crate::tools::submit::{SubmitSlot, ThreadSummaryPayload};
 use crate::week::week_window;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use da_harness::multi_tool::InferenceCallback;
 use da_harness::OpenAIClient;
+use da_harness::multi_tool::InferenceCallback;
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,9 +24,8 @@ use std::sync::LazyLock;
 use tracing::info;
 
 /// Rewrite `[text](id://message-id)` citations to lore permalinks for published markdown.
-static ID_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\]\(id://([^)]+)\)").expect("id link regex")
-});
+static ID_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\]\(id://([^)]+)\)").expect("id link regex"));
 
 pub fn rewrite_id_links_to_lore(markdown: &str, lore_base: &str) -> String {
     ID_LINK_RE
@@ -169,7 +168,9 @@ pub fn build_thread_user_message(
         }
     }
     if !same_week.is_empty() {
-        s.push_str("\nSame-week predecessors already summarized (ReadOutputFile these if useful):\n");
+        s.push_str(
+            "\nSame-week predecessors already summarized (ReadOutputFile these if useful):\n",
+        );
         for p in same_week {
             s.push_str(&format!("  - {p}\n"));
         }
@@ -178,9 +179,7 @@ pub fn build_thread_user_message(
         "\nOptional deeper history: GlobOutputs \"{}\"\n",
         prior_thread_glob_pattern(&thread.root_id)
     ));
-    s.push_str(
-        "\nSummarize this thread using the tools as needed, then SubmitThreadSummary.\n",
-    );
+    s.push_str("\nSummarize this thread using the tools as needed, then SubmitThreadSummary.\n");
     s
 }
 
@@ -219,7 +218,10 @@ pub fn write_thread_summary_file(
         "week_ending: {}\n",
         yaml_double_quoted(&week.format("%Y-%m-%d").to_string())
     ));
-    fm.push_str(&format!("subject: {}\n", yaml_double_quoted(&thread.subject)));
+    fm.push_str(&format!(
+        "subject: {}\n",
+        yaml_double_quoted(&thread.subject)
+    ));
     fm.push_str(&format!("title: {}\n", yaml_double_quoted(&title)));
     fm.push_str("message_ids_this_week:\n");
     for &idx in &thread.message_indices {
@@ -243,6 +245,7 @@ pub fn write_thread_summary_file(
     Ok(path)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_thread_agent(
     ctx: ToolCtx,
     week: NaiveDate,
@@ -253,6 +256,7 @@ pub async fn run_thread_agent(
     total: usize,
     client: Option<OpenAIClient>,
     inference: Option<InferenceCallback>,
+    usage: UsageTotals,
 ) -> Result<PathBuf> {
     let outputs_path = ctx.outputs_path.clone();
     let path = thread_markdown_path(&outputs_path, week, &thread.root_id);
@@ -264,16 +268,8 @@ pub async fn run_thread_agent(
     let prior = find_prior_thread_summaries(&outputs_path, week, &thread.root_id, 3);
     let same = same_week_predecessors(&outputs_path, week, ordered_roots, &thread.root_id);
     let lore = ctx.lore_base_url.clone();
-    let user = build_thread_user_message(
-        week,
-        thread,
-        index,
-        &lore,
-        position,
-        total,
-        &prior,
-        &same,
-    );
+    let user =
+        build_thread_user_message(week, thread, index, &lore, position, total, &prior, &same);
 
     let ctx = ctx.with_focus(Some(thread.root_id.clone()));
     let slot = SubmitSlot::new();
@@ -287,19 +283,14 @@ pub async fn run_thread_agent(
         THREAD_AGENT_TIMEOUT,
         client,
         inference,
+        usage,
+        UsageStage::Thread,
     )
     .await
     .with_context(|| format!("thread agent for {}", thread.root_id))?;
 
-    let written = write_thread_summary_file(
-        &outputs_path,
-        week,
-        thread,
-        index,
-        &lore,
-        &payload,
-        &prior,
-    )?;
+    let written =
+        write_thread_summary_file(&outputs_path, week, thread, index, &lore, &payload, &prior)?;
     info!(root = %thread.root_id, path = %written.display(), "wrote thread summary");
     Ok(written)
 }
@@ -312,9 +303,7 @@ mod tests {
     fn rewrites_id_links_to_lore() {
         let md = r#"[As mentioned by Chuck Lever](id://<abc@def.com>) and [x](id://foo@bar)"#;
         let out = rewrite_id_links_to_lore(md, "https://lore.kernel.org/linux-nfs/");
-        assert!(out.contains(
-            "](https://lore.kernel.org/linux-nfs/abc@def.com/)"
-        ));
+        assert!(out.contains("](https://lore.kernel.org/linux-nfs/abc@def.com/)"));
         assert!(out.contains("](https://lore.kernel.org/linux-nfs/foo@bar/)"));
         assert!(!out.contains("id://"));
     }

@@ -13,22 +13,22 @@ pub mod search_related_threads;
 pub mod submit;
 
 #[allow(unused_imports)] // re-exported for agents (PR5+)
-pub use get_email::{get_email, GetEmailArgs};
+pub use get_email::{GetEmailArgs, get_email};
 #[allow(unused_imports)]
-pub use glob_outputs::{glob_outputs, GlobOutputsArgs};
+pub use glob_outputs::{GlobOutputsArgs, glob_outputs};
 #[allow(unused_imports)]
-pub use grep_emails::{grep_emails, GrepEmailsArgs};
+pub use grep_emails::{GrepEmailsArgs, grep_emails};
 #[allow(unused_imports)]
-pub use grep_outputs::{grep_outputs, GrepOutputsArgs};
+pub use grep_outputs::{GrepOutputsArgs, grep_outputs};
 #[allow(unused_imports)]
-pub use list_thread_messages::{list_thread_messages, ListThreadMessagesArgs};
+pub use list_thread_messages::{ListThreadMessagesArgs, list_thread_messages};
 #[allow(unused_imports)]
 pub use paths::{path_glob_match, resolve_output_path};
 #[allow(unused_imports)]
-pub use read_output_file::{read_output_file, ReadOutputFileArgs};
+pub use read_output_file::{ReadOutputFileArgs, read_output_file};
 #[allow(unused_imports)]
 pub use search_related_threads::{
-    normalize_subject, search_related_threads, subject_tokens, SearchRelatedThreadsArgs,
+    SearchRelatedThreadsArgs, normalize_subject, search_related_threads, subject_tokens,
 };
 
 use crate::email_index::EmailIndex;

@@ -11,10 +11,3 @@ pub struct EmailMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Thread {
-    pub root_id: String,
-    pub subject: String,
-    pub messages: Vec<EmailMessage>,
-}

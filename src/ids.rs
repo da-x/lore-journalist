@@ -99,24 +99,15 @@ mod tests {
             normalize_message_id("<20260108004016.3907158-1-cel@kernel.org>,"),
             "<20260108004016.3907158-1-cel@kernel.org>"
         );
-        assert_eq!(
-            normalize_message_id(" <abc@def.com>, "),
-            "<abc@def.com>"
-        );
+        assert_eq!(normalize_message_id(" <abc@def.com>, "), "<abc@def.com>");
         assert_eq!(normalize_message_id("<a@b>;"), "<a@b>");
     }
 
     #[test]
     fn file_stem_percent_encodes_typical_id() {
-        assert_eq!(
-            file_stem_for_id(" <abc@def.com>"),
-            "%3Cabc%40def.com%3E"
-        );
+        assert_eq!(file_stem_for_id(" <abc@def.com>"), "%3Cabc%40def.com%3E");
         // Same stem whether raw or already normalized.
-        assert_eq!(
-            file_stem_for_id("<abc@def.com>"),
-            "%3Cabc%40def.com%3E"
-        );
+        assert_eq!(file_stem_for_id("<abc@def.com>"), "%3Cabc%40def.com%3E");
     }
 
     #[test]
@@ -125,10 +116,14 @@ mod tests {
         let stem = file_stem_for_id(&long);
         assert_eq!(stem.len(), 64);
         assert!(
-            stem.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            stem.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "expected lowercase hex, got {stem}"
         );
-        assert_eq!(stem, sha256_hex_lower(normalize_message_id(&long).as_bytes()));
+        assert_eq!(
+            stem,
+            sha256_hex_lower(normalize_message_id(&long).as_bytes())
+        );
     }
 
     #[test]

@@ -21,9 +21,7 @@ pub fn lore_url_for_message_id(lore_base: &str, message_id: &str) -> String {
 /// Path segment lore uses for a Message-ID: normalized, without `<` / `>`.
 pub fn lore_message_id_path_segment(message_id: &str) -> String {
     let n = normalize_message_id(message_id);
-    n.trim_start_matches('<')
-        .trim_end_matches('>')
-        .to_string()
+    n.trim_start_matches('<').trim_end_matches('>').to_string()
 }
 
 /// Markdown link to a lore message: `[label](url)`.
@@ -51,20 +49,13 @@ mod tests {
 
     #[test]
     fn lore_url_base_without_trailing_slash() {
-        let url = lore_url_for_message_id(
-            "https://lore.kernel.org/linux-nfs",
-            "<abc@def.com>",
-        );
+        let url = lore_url_for_message_id("https://lore.kernel.org/linux-nfs", "<abc@def.com>");
         assert_eq!(url, "https://lore.kernel.org/linux-nfs/abc@def.com/");
     }
 
     #[test]
     fn markdown_link() {
-        let md = lore_markdown_link(
-            DEFAULT_LORE_BASE,
-            "<x@y>",
-            "2026-07-18 Alice — subject",
-        );
+        let md = lore_markdown_link(DEFAULT_LORE_BASE, "<x@y>", "2026-07-18 Alice — subject");
         assert_eq!(
             md,
             "[2026-07-18 Alice — subject](https://lore.kernel.org/linux-nfs/x@y/)"

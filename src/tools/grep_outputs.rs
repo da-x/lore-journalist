@@ -1,8 +1,8 @@
 //! `GrepOutputs` pure handler: regex over files under outputs_path.
 
-use super::paths::{path_glob_match, relative_display, resolve_output_path};
 use super::ToolCtx;
-use anyhow::{bail, Context, Result};
+use super::paths::{path_glob_match, relative_display, resolve_output_path};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use std::fs;
 use walkdir::WalkDir;
@@ -22,8 +22,8 @@ pub async fn grep_outputs(ctx: &ToolCtx, args: GrepOutputsArgs) -> Result<String
     if args.pattern.is_empty() {
         bail!("pattern is required");
     }
-    let re = Regex::new(&args.pattern)
-        .with_context(|| format!("invalid regex: {}", args.pattern))?;
+    let re =
+        Regex::new(&args.pattern).with_context(|| format!("invalid regex: {}", args.pattern))?;
     let glob_pat = args.glob.as_deref().unwrap_or("**/*");
     if glob_pat.contains("..") || glob_pat.starts_with('/') {
         bail!("invalid glob filter");
