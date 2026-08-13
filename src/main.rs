@@ -143,6 +143,7 @@ async fn summarize_week_cmd(
         week,
         start_week,
         &config.lore_base_url,
+        &config.list,
         opts,
     )
     .await?;
@@ -195,7 +196,7 @@ async fn summarize_week_cmd(
             }
     );
     if published {
-        crate::html::maybe_render_html(&outputs, html_dir)?;
+        crate::html::maybe_render_html(&outputs, html_dir, config.list.short_title())?;
     }
     Ok(())
 }
@@ -217,7 +218,7 @@ fn render_html_cmd(
             "html_outputs_path is required for render-html (set it in config or pass --html-dir)"
         );
     };
-    crate::html::render_html_tree(&outputs, &html_dir)?;
+    crate::html::render_html_tree(&outputs, &html_dir, config.list.short_title())?;
     info!(
         outputs = %outputs.display(),
         html_dir = %html_dir.display(),

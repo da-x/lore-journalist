@@ -6,6 +6,7 @@ use crate::agent::session::{
 };
 use crate::agent::thread::run_thread_agent;
 use crate::agent::week::{all_thread_files_present, run_week_overview_and_finalize};
+use crate::config::ListConfig;
 use crate::email_index::{EmailIndex, EmailMeta, thread_root_id};
 use crate::lock::SummarizeLock;
 use crate::outputs::{
@@ -109,6 +110,7 @@ pub async fn materialize_week(
     index: &EmailIndex,
     outputs_path: &Path,
     week: NaiveDate,
+    site_title: &str,
 ) -> Result<MaterializeResult> {
     assert_week_ended(week)?;
 
@@ -125,7 +127,7 @@ pub async fn materialize_week(
     let active = select_active_threads(index, week);
     if active.is_empty() {
         info!(%week, summarize_empty_week = true, "no messages in week window; writing empty stub");
-        write_empty_week_stub(outputs_path, week)?;
+        write_empty_week_stub(outputs_path, week, site_title)?;
         return Ok(MaterializeResult::EmptyWeekComplete { week });
     }
 
@@ -145,7 +147,7 @@ pub async fn materialize_week(
 }
 
 /// Empty-week path: stub index, root catalog, `.complete`.
-pub fn write_empty_week_stub(outputs_path: &Path, week: NaiveDate) -> Result<()> {
+pub fn write_empty_week_stub(outputs_path: &Path, week: NaiveDate, site_title: &str) -> Result<()> {
     ensure_week_layout(outputs_path, week)?;
     write_empty_week_index(outputs_path, week)?;
     let mut complete = scan_week_dirs(outputs_path)?.0;
@@ -155,7 +157,7 @@ pub fn write_empty_week_stub(outputs_path: &Path, week: NaiveDate) -> Result<()>
     }
     let entries =
         root_entries_for_complete_weeks(outputs_path, &complete, Some((week, "No activity")))?;
-    write_root_index(outputs_path, &entries)?;
+    write_root_index(outputs_path, &entries, site_title)?;
     write_complete_marker(outputs_path, week)?;
     Ok(())
 }
@@ -265,6 +267,7 @@ pub async fn run_summarize_week(
     week: Option<&str>,
     start_week: Option<&str>,
     lore_base_url: &str,
+    list: &ListConfig,
     opts: AgentRunOpts,
 ) -> Result<MaterializeResult> {
     let started = Instant::now();
@@ -293,7 +296,7 @@ pub async fn run_summarize_week(
 
     info!("Loading email index for week ending {w}");
     let index = EmailIndex::load(pool).await?;
-    let prep = materialize_week(pool, &index, outputs_path, w).await?;
+    let prep = materialize_week(pool, &index, outputs_path, w, &list.title).await?;
     match &prep {
         MaterializeResult::EmptyWeekComplete { week } => {
             log_summarize_metrics(*week, started.elapsed().as_millis(), 0, 0, 0, true, &usage);
@@ -317,6 +320,7 @@ pub async fn run_summarize_week(
         outputs_path,
         w,
         lore_base_url,
+        list,
         opts,
         usage,
         started,
@@ -332,6 +336,7 @@ pub async fn run_agents_for_week(
     outputs_path: &Path,
     week: NaiveDate,
     lore_base_url: &str,
+    list: &ListConfig,
     opts: AgentRunOpts,
     usage: UsageTotals,
     started: Instant,
@@ -350,7 +355,8 @@ pub async fn run_agents_for_week(
         week,
         week_window(week),
     )
-    .with_lore_base(lore_base_url);
+    .with_lore_base(lore_base_url)
+    .with_list(list.clone());
 
     let order = match obtain_thread_order(
         ctx.clone(),
@@ -600,7 +606,9 @@ mod tests {
         let out = temp_outputs();
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
 
-        let result = materialize_week(&pool, &index, &out, w).await.unwrap();
+        let result = materialize_week(&pool, &index, &out, w, "Mailing List Weekly Summaries")
+            .await
+            .unwrap();
         match result {
             MaterializeResult::WeekPrepared {
                 message_count,
@@ -673,7 +681,9 @@ mod tests {
         let out = temp_outputs();
         let w = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
 
-        let result = materialize_week(&pool, &index, &out, w).await.unwrap();
+        let result = materialize_week(&pool, &index, &out, w, "Mailing List Weekly Summaries")
+            .await
+            .unwrap();
         assert!(matches!(
             result,
             MaterializeResult::EmptyWeekComplete { .. }
@@ -691,7 +701,9 @@ mod tests {
         assert!(root.contains("2026-07-20"));
         assert!(root.contains("No activity"));
 
-        let again = materialize_week(&pool, &index, &out, w).await.unwrap();
+        let again = materialize_week(&pool, &index, &out, w, "Mailing List Weekly Summaries")
+            .await
+            .unwrap();
         assert!(matches!(again, MaterializeResult::AlreadyComplete { .. }));
 
         let _ = fs::remove_dir_all(&out);
@@ -715,6 +727,7 @@ mod tests {
             None,
             Some("2026-07-20"),
             "https://lore.kernel.org/linux-nfs/",
+            &crate::config::ListConfig::default(),
             AgentRunOpts {
                 prepare_only: true,
                 ..Default::default()

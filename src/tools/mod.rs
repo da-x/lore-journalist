@@ -31,6 +31,7 @@ pub use search_related_threads::{
     SearchRelatedThreadsArgs, normalize_subject, search_related_threads, subject_tokens,
 };
 
+use crate::config::ListConfig;
 use crate::email_index::EmailIndex;
 use crate::lore::DEFAULT_LORE_BASE;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -54,6 +55,8 @@ pub struct ToolCtx {
     pub focus_thread_root: Option<String>,
     /// Lore archive base for message links in tool output.
     pub lore_base_url: String,
+    /// Per-list identity / agent briefing.
+    pub list: ListConfig,
     /// When set (e.g. ordering agent), `SearchRelatedThreads` only considers these roots.
     pub allowed_thread_roots: Option<HashSet<String>>,
 }
@@ -79,6 +82,7 @@ impl ToolCtx {
             week_window,
             focus_thread_root: None,
             lore_base_url: DEFAULT_LORE_BASE.to_string(),
+            list: ListConfig::default(),
             allowed_thread_roots: None,
         }
     }
@@ -90,6 +94,11 @@ impl ToolCtx {
 
     pub fn with_lore_base(mut self, lore_base_url: impl Into<String>) -> Self {
         self.lore_base_url = lore_base_url.into();
+        self
+    }
+
+    pub fn with_list(mut self, list: ListConfig) -> Self {
+        self.list = list;
         self
     }
 

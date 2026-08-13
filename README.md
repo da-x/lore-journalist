@@ -1,6 +1,6 @@
 # Weekly mailing-list discussion summarizer
 
-Turns a lore-style git mail archive (ingested into SQLite) into **one completed calendar week** of markdown under `outputs_path`, and optionally a mirrored static HTML tree under `html_outputs_path`. Agents explore mail and prior summaries via tools, then submit order / thread / week results. Per-message markdown is **not** written; citations are lore.kernel.org permalinks.
+Turns a lore-style git mail archive (ingested into SQLite) into **one completed calendar week** of markdown under `outputs_path`, and optionally a mirrored static HTML tree under `html_outputs_path`. The list name, site titles, archive URL, and agent focus come from config so the same binary works for any mailing list. Agents explore mail and prior summaries via tools, then submit order / thread / week results. Per-message markdown is **not** written; citations are lore permalinks.
 
 Design: [`doc/design.md`](doc/design.md).
 
@@ -23,13 +23,21 @@ lore_base_url = "https://lore.kernel.org/linux-nfs/"
 outputs_path = "/path/to/weekly-outputs"   # required for summarize-week
 html_outputs_path = "/path/to/weekly-html" # optional; omit to skip HTML
 
+[list]
+title = "NFS Mailing List Weekly Summaries"   # root catalog H1
+short_title = "NFS Weekly Summaries"          # HTML header; defaults to title
+name = "the Linux NFS mailing list"           # agent role ("covering …")
+focus = "Focus heavily on NFS client development and important bug fixes."
+
 [openai]
 api_base = "https://api.x.ai/v1"
 model_name = "..."
 api_key = "..."
 ```
 
-`outputs_path` is required for `summarize-week` and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` defaults to `https://lore.kernel.org/linux-nfs/`.
+`outputs_path` is required for `summarize-week` and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/linux-nfs/`).
+
+`[list]` is how the same binary covers different mailing lists: titles go into the markdown catalog and HTML chrome; `name` and `focus` go into the thread and week agent prompts. Omit `[list]` for generic wording (`Mailing List Weekly Summaries` / `this mailing list`).
 
 ## Commands
 

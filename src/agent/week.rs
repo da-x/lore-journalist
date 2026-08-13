@@ -19,12 +19,6 @@ use std::fs;
 use std::path::Path;
 use tracing::info;
 
-const WEEK_SYSTEM: &str = r#"You are a technical editor covering the Linux NFS mailing list.
-Write a front-page overview of this week's activity: critical bugs, NFS client focus, major trends, and ongoing debates.
-Read thread/*.md files via ReadOutputFile as needed. Link discussions with relative paths like thread/<stem>.md.
-Call SubmitWeekOverview exactly once with a non-empty headline (one line) and markdown_body.
-"#;
-
 /// True when every expected root has a `thread/<stem>.md` file.
 pub fn all_thread_files_present(
     outputs_path: &Path,
@@ -111,6 +105,7 @@ pub fn write_week_index(
 pub fn regenerate_root_index(
     outputs_path: &Path,
     include_week: Option<(NaiveDate, &str)>,
+    site_title: &str,
 ) -> Result<()> {
     let (mut complete, _) = scan_week_dirs(outputs_path)?;
     if let Some((w, _)) = include_week {
@@ -134,7 +129,7 @@ pub fn regenerate_root_index(
         };
         entries.push(RootIndexEntry { week: w, headline });
     }
-    write_root_index(outputs_path, &entries)?;
+    write_root_index(outputs_path, &entries, site_title)?;
     Ok(())
 }
 
@@ -161,13 +156,14 @@ pub fn finalize_week(
     agent_body: &str,
     ordered_roots: &[String],
     by_subject: &[(String, String)],
+    site_title: &str,
 ) -> Result<()> {
     let toc = format_host_thread_toc(ordered_roots, by_subject);
     write_week_index(outputs_path, week, headline, agent_body, &toc)?;
     if let Ok(f) = fs::File::open(week_index_path(outputs_path, week)) {
         let _ = f.sync_all();
     }
-    regenerate_root_index(outputs_path, Some((week, headline)))?;
+    regenerate_root_index(outputs_path, Some((week, headline)), site_title)?;
     if let Ok(f) = fs::File::open(root_index_path(outputs_path)) {
         let _ = f.sync_all();
     }
@@ -206,7 +202,7 @@ pub async fn run_week_overview_and_finalize(
 
     info!(%week, "overview start");
     let payload = run_until_submit(
-        WEEK_SYSTEM,
+        &ctx.list.week_system_prompt(),
         user,
         tools,
         slot,
@@ -227,6 +223,7 @@ pub async fn run_week_overview_and_finalize(
         &payload.markdown_body,
         ordered_roots,
         &by_subject,
+        &ctx.list.title,
     )?;
     Ok(())
 }

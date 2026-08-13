@@ -13,7 +13,9 @@ const STYLE_CSS: &str = include_str!("style.css");
 
 /// Convert every `*.md` under `md_root` into `*.html` under `html_root`,
 /// preserving relative directory structure, and write the shared stylesheet.
-pub fn render_html_tree(md_root: &Path, html_root: &Path) -> Result<()> {
+///
+/// `site_title` is the HTML header wordmark (list-specific).
+pub fn render_html_tree(md_root: &Path, html_root: &Path, site_title: &str) -> Result<()> {
     if html_root.as_os_str().is_empty() {
         bail!("html_outputs_path is empty");
     }
@@ -46,8 +48,8 @@ pub fn render_html_tree(md_root: &Path, html_root: &Path) -> Result<()> {
             .with_context(|| format!("strip prefix from {}", path.display()))?;
         let md =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let (_fm, title, body) = convert_markdown_document(&md);
-        let page = wrap_page(&title, rel, &body);
+        let (_fm, title, body) = convert_markdown_document(&md, site_title);
+        let page = wrap_page(&title, rel, &body, site_title);
         let dest = html_root.join(rel).with_extension("html");
         write_atomic(&dest, &page).with_context(|| format!("write {}", dest.display()))?;
         written.push(rel.with_extension("html"));
@@ -66,14 +68,14 @@ pub fn render_html_tree(md_root: &Path, html_root: &Path) -> Result<()> {
 }
 
 /// No-op when `html_root` is unset or empty.
-pub fn maybe_render_html(md_root: &Path, html_root: Option<&Path>) -> Result<()> {
+pub fn maybe_render_html(md_root: &Path, html_root: Option<&Path>, site_title: &str) -> Result<()> {
     let Some(html_root) = html_root else {
         return Ok(());
     };
     if html_root.as_os_str().is_empty() {
         return Ok(());
     }
-    render_html_tree(md_root, html_root)
+    render_html_tree(md_root, html_root, site_title)
 }
 
 /// Parse an optional config string into a path (None if missing or blank).
@@ -127,7 +129,7 @@ mod tests {
         std::fs::write(md.join("2026-07-20/.complete"), "").unwrap();
         std::fs::write(md.join(".summarize-week.lock"), "").unwrap();
 
-        render_html_tree(&md, &html).unwrap();
+        render_html_tree(&md, &html, "Weekly Summaries").unwrap();
 
         let root = std::fs::read_to_string(html.join("index.html")).unwrap();
         let week = std::fs::read_to_string(html.join("2026-07-20/index.html")).unwrap();
@@ -170,7 +172,7 @@ mod tests {
         )
         .unwrap();
 
-        render_html_tree(&md, &html).unwrap();
+        render_html_tree(&md, &html, "Weekly Summaries").unwrap();
 
         let week = std::fs::read_to_string(html.join("2026-07-20/index.html")).unwrap();
         assert!(
@@ -197,9 +199,9 @@ mod tests {
     fn maybe_render_skips_unset() {
         let (md, html) = temp_pair();
         std::fs::write(md.join("index.md"), "# Hi\n").unwrap();
-        maybe_render_html(&md, None).unwrap();
+        maybe_render_html(&md, None, "Weekly Summaries").unwrap();
         assert!(!html.join("index.html").exists());
-        maybe_render_html(&md, Some(Path::new(""))).unwrap();
+        maybe_render_html(&md, Some(Path::new("")), "Weekly Summaries").unwrap();
         assert!(!html.join("index.html").exists());
         let _ = std::fs::remove_dir_all(&md);
     }

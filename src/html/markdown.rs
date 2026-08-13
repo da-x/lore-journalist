@@ -2,7 +2,7 @@
 
 use pulldown_cmark::{Event, Options, Parser, Tag, html};
 
-const FALLBACK_TITLE: &str = "NFS Weekly Summaries";
+const FALLBACK_TITLE: &str = "Mailing List Weekly Summaries";
 
 #[derive(Debug, Default, Clone)]
 pub struct FrontMatter {
@@ -112,7 +112,7 @@ fn first_atx_h1(md: &str) -> Option<String> {
 }
 
 /// Page title: front-matter `title`, then `headline`, then first ATX H1, then fallback.
-pub fn page_title(fm: &FrontMatter, body_md: &str) -> String {
+pub fn page_title(fm: &FrontMatter, body_md: &str, fallback: &str) -> String {
     if let Some(t) = fm.title.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         return t.to_string();
     }
@@ -124,7 +124,14 @@ pub fn page_title(fm: &FrontMatter, body_md: &str) -> String {
     {
         return t.to_string();
     }
-    first_atx_h1(body_md).unwrap_or_else(|| FALLBACK_TITLE.to_string())
+    first_atx_h1(body_md).unwrap_or_else(|| {
+        let fb = fallback.trim();
+        if fb.is_empty() {
+            FALLBACK_TITLE.to_string()
+        } else {
+            fb.to_string()
+        }
+    })
 }
 
 /// Convert markdown body to an HTML fragment. Raw HTML from the source is
@@ -167,9 +174,9 @@ pub fn markdown_to_html_body(md: &str) -> String {
     out
 }
 
-pub fn convert_markdown_document(md: &str) -> (FrontMatter, String, String) {
+pub fn convert_markdown_document(md: &str, fallback_title: &str) -> (FrontMatter, String, String) {
     let (fm, body) = strip_front_matter(md);
-    let title = page_title(&fm, body);
+    let title = page_title(&fm, body, fallback_title);
     let html = markdown_to_html_body(body);
     (fm, title, html)
 }
@@ -233,7 +240,7 @@ mod tests {
     #[test]
     fn strips_front_matter_and_uses_headline() {
         let md = "---\nheadline: \"Quiet week\"\nempty: false\n---\n\n# Quiet week\n\nHello.\n";
-        let (fm, title, html) = convert_markdown_document(md);
+        let (fm, title, html) = convert_markdown_document(md, FALLBACK_TITLE);
         assert_eq!(fm.headline.as_deref(), Some("Quiet week"));
         assert_eq!(title, "Quiet week");
         assert!(!html.contains("headline:"));
@@ -245,7 +252,7 @@ mod tests {
     #[test]
     fn title_prefers_title_field() {
         let md = "---\ntitle: \"Thread title\"\nheadline: \"Week headline\"\n---\n\n# Heading\n";
-        let (_, title, _) = convert_markdown_document(md);
+        let (_, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
         assert_eq!(title, "Thread title");
     }
 

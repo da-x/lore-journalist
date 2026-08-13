@@ -397,6 +397,7 @@ mod tests {
             Some("2026-07-20"),
             None,
             "https://lore.kernel.org/linux-nfs/",
+            &crate::config::ListConfig::default(),
             AgentRunOpts {
                 thread_inference: Some(cb),
                 ..Default::default()

@@ -37,8 +37,6 @@ pub fn rewrite_id_links_to_lore(markdown: &str, lore_base: &str) -> String {
         .into_owned()
 }
 
-const THREAD_SYSTEM: &str = "You are a technical journalist specializing in Linux Kernel development. Adopt a journalistic tone in your responses.";
-
 /// Prior same-stem thread summaries across weeks (paths relative to outputs root), newest first.
 pub fn find_prior_thread_summaries(
     outputs_path: &Path,
@@ -104,6 +102,7 @@ pub fn build_thread_user_message(
     total: usize,
     prior: &[String],
     same_week: &[String],
+    focus: &str,
 ) -> String {
     let (start, end) = week_window(week);
     let mut s = String::new();
@@ -111,9 +110,15 @@ pub fn build_thread_user_message(
     // Journalistic brief (from legacy one-shot summarizer), adapted for tools.
     s.push_str(
         "Provide a detailed summary of the following mailing list thread.\n\
-         Highlight the key technical arguments, the evolution of the discussion, and the final conclusions.\n\
-         Focus heavily on NFS client development and important bug fixes.\n\
-         \n\
+         Highlight the key technical arguments, the evolution of the discussion, and the final conclusions.\n",
+    );
+    let focus = focus.trim();
+    if !focus.is_empty() {
+        s.push_str(focus);
+        s.push('\n');
+    }
+    s.push_str(
+        "\n\
          Scope this summary to activity in the current week when the thread spans multiple weeks;\n\
          bridge prior weeks only briefly (use prior summary files if listed below).\n\
          \n\
@@ -123,7 +128,7 @@ pub fn build_thread_user_message(
            (e.g., > \"Quote content\") for these quotes.\n\
          - Identify if the discussion is about a new feature, a protocol change, or a bug fix.\n\
          - When referring to a specific message, use the following markup: [text](id://message-id).\n\
-           Example: [As mentioned by Chuck Lever](id://example-msg-id).\n\
+           Example: [As mentioned by Alice](id://example-msg-id).\n\
          - The message-id should be taken exactly from the Message-ID header provided by tools\n\
            or listed below (normalized form, e.g. <...@...>).\n\
          - Use GetEmail / ListThreadMessages to load message bodies; do not invent content.\n\
@@ -268,15 +273,25 @@ pub async fn run_thread_agent(
     let prior = find_prior_thread_summaries(&outputs_path, week, &thread.root_id, 3);
     let same = same_week_predecessors(&outputs_path, week, ordered_roots, &thread.root_id);
     let lore = ctx.lore_base_url.clone();
-    let user =
-        build_thread_user_message(week, thread, index, &lore, position, total, &prior, &same);
+    let user = build_thread_user_message(
+        week,
+        thread,
+        index,
+        &lore,
+        position,
+        total,
+        &prior,
+        &same,
+        &ctx.list.focus,
+    );
 
+    let system = ctx.list.thread_system_prompt();
     let ctx = ctx.with_focus(Some(thread.root_id.clone()));
     let slot = SubmitSlot::new();
     let tools = build_thread_tools(ctx, slot.clone())?;
 
     let payload = run_until_submit(
-        THREAD_SYSTEM,
+        &system,
         user,
         tools,
         slot,

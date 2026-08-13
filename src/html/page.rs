@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path};
 
-const SITE_TITLE: &str = "NFS Weekly Summaries";
+const DEFAULT_SITE_TITLE: &str = "Weekly Summaries";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageKind {
@@ -86,11 +86,16 @@ fn crumb_items(kind: &PageKind) -> Vec<(Option<String>, String)> {
 }
 
 /// Wrap a body fragment in a full HTML5 document.
-pub fn wrap_page(title: &str, rel_md: &Path, body: &str) -> String {
+pub fn wrap_page(title: &str, rel_md: &Path, body: &str, site_title: &str) -> String {
     let css = stylesheet_href(rel_md);
     let kind = classify_page(rel_md);
     let title_esc = escape_html(title);
-    let site_esc = escape_html(SITE_TITLE);
+    let header = if site_title.trim().is_empty() {
+        DEFAULT_SITE_TITLE
+    } else {
+        site_title.trim()
+    };
+    let site_esc = escape_html(header);
     let home_href = match path_depth(rel_md) {
         0 => "index.html".to_string(),
         n => format!("{}index.html", "../".repeat(n)),
@@ -159,7 +164,12 @@ mod tests {
 
     #[test]
     fn crumbs_use_explicit_index_html() {
-        let week = wrap_page("Week", Path::new("2026-07-20/index.md"), "<p>x</p>\n");
+        let week = wrap_page(
+            "Week",
+            Path::new("2026-07-20/index.md"),
+            "<p>x</p>\n",
+            "Weekly Summaries",
+        );
         assert!(week.contains("href=\"../index.html\""), "{week}");
         assert!(!week.contains("href=\"../\""), "{week}");
         assert!(week.contains("href=\"../style.css\""), "{week}");
@@ -168,6 +178,7 @@ mod tests {
             "Thread",
             Path::new("2026-07-20/thread/foo.md"),
             "<p>x</p>\n",
+            "Weekly Summaries",
         );
         assert!(thread.contains("href=\"../../index.html\""), "{thread}");
         assert!(thread.contains("href=\"../index.html\""), "{thread}");

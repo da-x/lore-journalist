@@ -141,8 +141,13 @@ pub struct RootIndexEntry {
 }
 
 /// Render root `index.md` (newest weeks first).
-pub fn format_root_index(entries: &[RootIndexEntry]) -> String {
-    let mut out = String::from("# NFS Mailing List Weekly Summaries\n\n");
+pub fn format_root_index(entries: &[RootIndexEntry], site_title: &str) -> String {
+    let title = if site_title.trim().is_empty() {
+        "Mailing List Weekly Summaries"
+    } else {
+        site_title.trim()
+    };
+    let mut out = format!("# {title}\n\n");
     if entries.is_empty() {
         out.push_str("_No editions yet._\n");
         return out;
@@ -158,9 +163,13 @@ pub fn format_root_index(entries: &[RootIndexEntry]) -> String {
 }
 
 /// Write root catalog.
-pub fn write_root_index(outputs_path: &Path, entries: &[RootIndexEntry]) -> Result<()> {
+pub fn write_root_index(
+    outputs_path: &Path,
+    entries: &[RootIndexEntry],
+    site_title: &str,
+) -> Result<()> {
     let path = root_index_path(outputs_path);
-    write_atomic(&path, &format_root_index(entries))?;
+    write_atomic(&path, &format_root_index(entries, site_title))?;
     Ok(())
 }
 
@@ -227,6 +236,13 @@ mod tests {
             prior_thread_glob_pattern(msg),
             format!("*/thread/{}.md", file_stem_for_id(msg))
         );
+    }
+
+    #[test]
+    fn root_index_uses_configured_title() {
+        let md = format_root_index(&[], "linux-fsdevel Weekly Summaries");
+        assert!(md.starts_with("# linux-fsdevel Weekly Summaries\n"));
+        assert!(!md.contains("NFS"));
     }
 
     #[test]

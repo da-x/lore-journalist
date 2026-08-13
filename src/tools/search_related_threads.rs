@@ -138,7 +138,7 @@ pub fn subject_tokens(subject: &str) -> HashSet<String> {
         }
         if matches!(
             t.as_str(),
-            "the" | "and" | "for" | "with" | "from" | "this" | "that" | "nfs" | "patch" | "linux"
+            "the" | "and" | "for" | "with" | "from" | "this" | "that" | "patch" | "linux"
         ) {
             continue;
         }
