@@ -4,10 +4,14 @@ use pulldown_cmark::{Event, Options, Parser, Tag, html};
 
 const FALLBACK_TITLE: &str = "Mailing List Weekly Summaries";
 
+const DESC_MAX_CHARS: usize = 240;
+
 #[derive(Debug, Default, Clone)]
 pub struct FrontMatter {
     pub title: Option<String>,
     pub headline: Option<String>,
+    pub subject: Option<String>,
+    pub week_ending: Option<String>,
 }
 
 /// Split leading YAML front matter from the markdown body.
@@ -48,6 +52,10 @@ fn parse_front_matter(yaml: &str) -> FrontMatter {
             fm.title = Some(unquote_yaml_scalar(rest.trim()));
         } else if let Some(rest) = line.strip_prefix("headline:") {
             fm.headline = Some(unquote_yaml_scalar(rest.trim()));
+        } else if let Some(rest) = line.strip_prefix("subject:") {
+            fm.subject = Some(unquote_yaml_scalar(rest.trim()));
+        } else if let Some(rest) = line.strip_prefix("week_ending:") {
+            fm.week_ending = Some(unquote_yaml_scalar(rest.trim()));
         }
     }
     fm
@@ -132,6 +140,208 @@ pub fn page_title(fm: &FrontMatter, body_md: &str, fallback: &str) -> String {
             fb.to_string()
         }
     })
+}
+
+/// Unfurl / meta description: first candidate that is non-empty and not equal
+/// to `title`, else first non-empty candidate, else `site_title`.
+///
+/// Candidates, in order: front-matter `headline`, first substantial paragraph,
+/// front-matter `subject`.
+pub fn page_description(fm: &FrontMatter, body_md: &str, title: &str, site_title: &str) -> String {
+    let headline = nonempty_trimmed(fm.headline.as_deref());
+    let paragraph = first_substantial_paragraph(body_md);
+    let subject = nonempty_trimmed(fm.subject.as_deref());
+    let candidates = [headline, paragraph.as_deref(), subject];
+
+    let title = title.trim();
+    let pick = candidates
+        .into_iter()
+        .flatten()
+        .find(|s| *s != title)
+        .or_else(|| candidates.into_iter().flatten().next());
+
+    let raw = pick.unwrap_or_else(|| {
+        let fb = site_title.trim();
+        if fb.is_empty() { FALLBACK_TITLE } else { fb }
+    });
+    truncate_desc(raw, DESC_MAX_CHARS)
+}
+
+fn nonempty_trimmed(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn first_substantial_paragraph(md: &str) -> Option<String> {
+    let mut para = String::new();
+    let flush = |buf: &mut String| -> Option<String> {
+        let stripped = strip_inline_markdown(buf);
+        buf.clear();
+        if is_usable_paragraph(&stripped) {
+            Some(stripped)
+        } else {
+            None
+        }
+    };
+
+    for line in md.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            if !para.is_empty()
+                && let Some(s) = flush(&mut para)
+            {
+                return Some(s);
+            }
+            continue;
+        }
+        if is_block_skip(t) {
+            if !para.is_empty()
+                && let Some(s) = flush(&mut para)
+            {
+                return Some(s);
+            }
+            continue;
+        }
+        if let Some(item) = list_item_text(t) {
+            if para.is_empty() {
+                let stripped = strip_inline_markdown(item);
+                if is_usable_paragraph(&stripped) {
+                    return Some(stripped);
+                }
+            }
+            continue;
+        }
+        if !para.is_empty() {
+            para.push(' ');
+        }
+        para.push_str(t);
+    }
+    if !para.is_empty() {
+        return flush(&mut para);
+    }
+    None
+}
+
+fn is_block_skip(t: &str) -> bool {
+    t.starts_with('#') || t == "---" || t == "***" || t == "___" || t == "* * *"
+}
+
+fn list_item_text(t: &str) -> Option<&str> {
+    t.strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .or_else(|| t.strip_prefix("+ "))
+}
+
+fn is_usable_paragraph(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    !is_week_ending_only(s)
+}
+
+fn is_week_ending_only(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("week ending ") else {
+        return false;
+    };
+    let rest = rest.trim();
+    rest.len() == 10
+        && rest.as_bytes()[4] == b'-'
+        && rest.as_bytes()[7] == b'-'
+        && rest.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+}
+
+fn strip_inline_markdown(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut tmp = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if (chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[') || chars[i] == '[' {
+            let start = if chars[i] == '!' { i + 1 } else { i };
+            if let Some((text, next)) = parse_md_link(&chars, start) {
+                tmp.push_str(&text);
+                i = next;
+                continue;
+            }
+        }
+        tmp.push(chars[i]);
+        i += 1;
+    }
+    let stripped = tmp.replace("**", "").replace("__", "").replace('`', "");
+    let stripped = stripped.replace('*', "");
+    collapse_ws(&stripped)
+}
+
+fn parse_md_link(chars: &[char], start: usize) -> Option<(String, usize)> {
+    if start >= chars.len() || chars[start] != '[' {
+        return None;
+    }
+    let mut i = start + 1;
+    let mut text = String::new();
+    while i < chars.len() && chars[i] != ']' {
+        text.push(chars[i]);
+        i += 1;
+    }
+    if i >= chars.len() || chars[i] != ']' {
+        return None;
+    }
+    i += 1;
+    if i >= chars.len() || chars[i] != '(' {
+        return None;
+    }
+    i += 1;
+    while i < chars.len() && chars[i] != ')' {
+        i += 1;
+    }
+    if i >= chars.len() {
+        return None;
+    }
+    Some((text, i + 1))
+}
+
+fn collapse_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_space = true;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(c);
+            prev_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn truncate_desc(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    let mut n = 0;
+    let mut last_space = None;
+    let mut end = 0;
+    for (i, c) in s.char_indices() {
+        if n >= max {
+            break;
+        }
+        if c.is_whitespace() {
+            last_space = Some(i);
+        }
+        end = i + c.len_utf8();
+        n += 1;
+    }
+    let cut = last_space.filter(|&i| i > 0).unwrap_or(end);
+    format!("{}…", s[..cut].trim_end())
 }
 
 /// Convert markdown body to an HTML fragment. Raw HTML from the source is
@@ -261,5 +471,59 @@ mod tests {
         let html = markdown_to_html_body("before <script>alert(1)</script> after");
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;script&gt;"), "{html}");
+    }
+
+    #[test]
+    fn description_skips_headline_when_it_is_the_title() {
+        let md = "---\nheadline: \"Quiet week\"\nweek_ending: \"2026-07-20\"\n---\n\n# Quiet week\n\n*Week ending 2026-07-20*\n\nTrond submitted a pull of twelve fixes.\n";
+        let (fm, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
+        let desc = page_description(&fm, strip_front_matter(md).1, &title, FALLBACK_TITLE);
+        assert_eq!(fm.week_ending.as_deref(), Some("2026-07-20"));
+        assert_eq!(title, "Quiet week");
+        assert_eq!(desc, "Trond submitted a pull of twelve fixes.");
+        assert_ne!(desc, title);
+    }
+
+    #[test]
+    fn description_uses_subject_when_no_usable_paragraph() {
+        let md = "---\nsubject: \"[GIT PULL] NFS client bugfixes\"\n---\n\n# NFS Client Bugfixes\n\n## Summary\n";
+        let (fm, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
+        let desc = page_description(&fm, strip_front_matter(md).1, &title, FALLBACK_TITLE);
+        assert_eq!(desc, "[GIT PULL] NFS client bugfixes");
+    }
+
+    #[test]
+    fn description_strips_markdown_links() {
+        let md = "See [NFS](https://lore.kernel.org/linux-nfs/id/) on the list.\n";
+        let (fm, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
+        let desc = page_description(&fm, md, &title, FALLBACK_TITLE);
+        assert!(desc.contains("NFS"), "{desc}");
+        assert!(!desc.contains("]("), "{desc}");
+        assert!(!desc.contains("https://"), "{desc}");
+    }
+
+    #[test]
+    fn description_truncates_long_paragraph() {
+        let word = "abcdefghij ";
+        let long = word.repeat(30); // 330 chars
+        let md = format!("# Title\n\n{long}\n");
+        let (fm, title, _) = convert_markdown_document(&md, FALLBACK_TITLE);
+        let desc = page_description(&fm, strip_front_matter(&md).1, &title, FALLBACK_TITLE);
+        assert!(desc.ends_with('…'), "{desc}");
+        assert!(
+            desc.chars().count() <= DESC_MAX_CHARS + 1,
+            "{}",
+            desc.chars().count()
+        );
+        assert!(!desc.contains("headline:"));
+    }
+
+    #[test]
+    fn description_falls_back_to_site_title() {
+        let md = "# Heading only\n";
+        let (fm, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
+        assert_eq!(title, "Heading only");
+        let desc = page_description(&fm, strip_front_matter(md).1, &title, "Weekly Summaries");
+        assert_eq!(desc, "Weekly Summaries");
     }
 }

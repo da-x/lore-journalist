@@ -1,8 +1,33 @@
 //! HTML5 document shell with relative CSS and breadcrumb hrefs.
 
+use super::unfurl::{absolute_page_url, article_published_time, escape_html, unfurl_meta_html};
 use std::path::{Component, Path};
 
 const DEFAULT_SITE_TITLE: &str = "Weekly Summaries";
+
+/// Chrome + unfurl fields for [`wrap_page`].
+#[derive(Debug, Clone, Copy)]
+pub struct PageMeta<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub site_title: &'a str,
+    pub site_url: Option<&'a str>,
+    pub og_image: Option<&'a str>,
+    pub week_ending: Option<&'a str>,
+}
+
+impl<'a> PageMeta<'a> {
+    pub fn basic(title: &'a str, site_title: &'a str) -> Self {
+        Self {
+            title,
+            description: title,
+            site_title,
+            site_url: None,
+            og_image: None,
+            week_ending: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageKind {
@@ -53,19 +78,11 @@ pub fn classify_page(rel_md: &Path) -> PageKind {
     }
 }
 
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
+fn og_type_for(kind: &PageKind) -> &'static str {
+    match kind {
+        PageKind::Week { .. } | PageKind::Thread { .. } => "article",
+        PageKind::Root | PageKind::Other => "website",
     }
-    out
 }
 
 fn crumb_items(kind: &PageKind) -> Vec<(Option<String>, String)> {
@@ -86,20 +103,33 @@ fn crumb_items(kind: &PageKind) -> Vec<(Option<String>, String)> {
 }
 
 /// Wrap a body fragment in a full HTML5 document.
-pub fn wrap_page(title: &str, rel_md: &Path, body: &str, site_title: &str) -> String {
+pub fn wrap_page(rel_md: &Path, body: &str, meta: &PageMeta<'_>) -> String {
     let css = stylesheet_href(rel_md);
     let kind = classify_page(rel_md);
-    let title_esc = escape_html(title);
-    let header = if site_title.trim().is_empty() {
+    let title_esc = escape_html(meta.title);
+    let header = if meta.site_title.trim().is_empty() {
         DEFAULT_SITE_TITLE
     } else {
-        site_title.trim()
+        meta.site_title.trim()
     };
     let site_esc = escape_html(header);
     let home_href = match path_depth(rel_md) {
         0 => "index.html".to_string(),
         n => format!("{}index.html", "../".repeat(n)),
     };
+    let page_url = meta
+        .site_url
+        .and_then(|base| absolute_page_url(base, rel_md));
+    let published = article_published_time(meta.week_ending);
+    let unfurl = unfurl_meta_html(
+        meta.title,
+        meta.description,
+        header,
+        og_type_for(&kind),
+        page_url.as_deref(),
+        meta.og_image,
+        published.as_deref(),
+    );
 
     let crumbs = crumb_items(&kind);
     let mut nav = String::new();
@@ -128,7 +158,7 @@ pub fn wrap_page(title: &str, rel_md: &Path, body: &str, site_title: &str) -> St
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title_esc}</title>
-  <link rel="stylesheet" href="{css}">
+{unfurl}  <link rel="stylesheet" href="{css}">
 </head>
 <body>
   <header class="site-header">
@@ -165,25 +195,70 @@ mod tests {
     #[test]
     fn crumbs_use_explicit_index_html() {
         let week = wrap_page(
-            "Week",
             Path::new("2026-07-20/index.md"),
             "<p>x</p>\n",
-            "Weekly Summaries",
+            &PageMeta::basic("Week", "Weekly Summaries"),
         );
         assert!(week.contains("href=\"../index.html\""), "{week}");
         assert!(!week.contains("href=\"../\""), "{week}");
         assert!(week.contains("href=\"../style.css\""), "{week}");
 
         let thread = wrap_page(
-            "Thread",
             Path::new("2026-07-20/thread/foo.md"),
             "<p>x</p>\n",
-            "Weekly Summaries",
+            &PageMeta::basic("Thread", "Weekly Summaries"),
         );
         assert!(thread.contains("href=\"../../index.html\""), "{thread}");
         assert!(thread.contains("href=\"../index.html\""), "{thread}");
         assert!(thread.contains("href=\"../../style.css\""), "{thread}");
         assert!(!thread.contains("href=\"/"), "{thread}");
+    }
+
+    #[test]
+    fn week_page_emits_article_unfurl_tags() {
+        let meta = PageMeta {
+            title: "Quiet week",
+            description: "Twelve client fixes landed.",
+            site_title: "NFS Weekly Summaries",
+            site_url: Some("https://ex/nfs/"),
+            og_image: None,
+            week_ending: Some("2026-07-20"),
+        };
+        let week = wrap_page(Path::new("2026-07-20/index.md"), "<p>x</p>\n", &meta);
+        assert!(
+            week.contains("property=\"og:description\" content=\"Twelve client fixes landed.\"")
+        );
+        assert!(week.contains("property=\"og:type\" content=\"article\""));
+        assert!(week.contains("property=\"og:site_name\" content=\"NFS Weekly Summaries\""));
+        assert!(week.contains("rel=\"canonical\" href=\"https://ex/nfs/2026-07-20/index.html\""));
+        assert!(
+            week.contains("property=\"article:published_time\" content=\"2026-07-20T00:00:00Z\"")
+        );
+        assert!(week.contains("name=\"twitter:card\" content=\"summary\""));
+    }
+
+    #[test]
+    fn thread_canonical_double_encodes_filename() {
+        let meta = PageMeta {
+            title: "GIT PULL",
+            description: "Bugfixes.",
+            site_title: "Weekly Summaries",
+            site_url: Some("http://host/nfs/"),
+            og_image: None,
+            week_ending: None,
+        };
+        let thread = wrap_page(
+            Path::new("2026-07-20/thread/%3Cfoo%40bar.com%3E.md"),
+            "<p>x</p>\n",
+            &meta,
+        );
+        assert!(
+            thread.contains(
+                "href=\"http://host/nfs/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html\""
+            ),
+            "{thread}"
+        );
+        assert!(thread.contains("property=\"og:url\" content=\"http://host/nfs/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html\""));
     }
 
     #[test]

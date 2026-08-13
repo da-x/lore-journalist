@@ -1,8 +1,8 @@
 //! Walk a markdown outputs tree and write a mirrored HTML tree plus `style.css`.
 
 use super::links::fix_html_links;
-use super::markdown::convert_markdown_document;
-use super::page::wrap_page;
+use super::markdown::{convert_markdown_document, page_description, strip_front_matter};
+use super::page::{PageMeta, wrap_page};
 use crate::outputs::write_atomic;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -11,11 +11,29 @@ use walkdir::WalkDir;
 
 const STYLE_CSS: &str = include_str!("style.css");
 
+/// Inputs for a full-tree HTML render.
+#[derive(Debug, Clone, Copy)]
+pub struct HtmlRenderOpts<'a> {
+    pub site_title: &'a str,
+    pub site_url: Option<&'a str>,
+    pub og_image: Option<&'a str>,
+}
+
+impl<'a> HtmlRenderOpts<'a> {
+    pub fn new(site_title: &'a str) -> Self {
+        Self {
+            site_title,
+            site_url: None,
+            og_image: None,
+        }
+    }
+}
+
 /// Convert every `*.md` under `md_root` into `*.html` under `html_root`,
 /// preserving relative directory structure, and write the shared stylesheet.
 ///
-/// `site_title` is the HTML header wordmark (list-specific).
-pub fn render_html_tree(md_root: &Path, html_root: &Path, site_title: &str) -> Result<()> {
+/// `opts.site_title` is the HTML header wordmark (list-specific).
+pub fn render_html_tree(md_root: &Path, html_root: &Path, opts: HtmlRenderOpts<'_>) -> Result<()> {
     if html_root.as_os_str().is_empty() {
         bail!("html_outputs_path is empty");
     }
@@ -48,8 +66,21 @@ pub fn render_html_tree(md_root: &Path, html_root: &Path, site_title: &str) -> R
             .with_context(|| format!("strip prefix from {}", path.display()))?;
         let md =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let (_fm, title, body) = convert_markdown_document(&md, site_title);
-        let page = wrap_page(&title, rel, &body, site_title);
+        let (fm, title, body) = convert_markdown_document(&md, opts.site_title);
+        let body_md = strip_front_matter(&md).1;
+        let description = page_description(&fm, body_md, &title, opts.site_title);
+        let page = wrap_page(
+            rel,
+            &body,
+            &PageMeta {
+                title: &title,
+                description: &description,
+                site_title: opts.site_title,
+                site_url: opts.site_url,
+                og_image: opts.og_image,
+                week_ending: fm.week_ending.as_deref(),
+            },
+        );
         let dest = html_root.join(rel).with_extension("html");
         write_atomic(&dest, &page).with_context(|| format!("write {}", dest.display()))?;
         written.push(rel.with_extension("html"));
@@ -68,14 +99,18 @@ pub fn render_html_tree(md_root: &Path, html_root: &Path, site_title: &str) -> R
 }
 
 /// No-op when `html_root` is unset or empty.
-pub fn maybe_render_html(md_root: &Path, html_root: Option<&Path>, site_title: &str) -> Result<()> {
+pub fn maybe_render_html(
+    md_root: &Path,
+    html_root: Option<&Path>,
+    opts: HtmlRenderOpts<'_>,
+) -> Result<()> {
     let Some(html_root) = html_root else {
         return Ok(());
     };
     if html_root.as_os_str().is_empty() {
         return Ok(());
     }
-    render_html_tree(md_root, html_root, site_title)
+    render_html_tree(md_root, html_root, opts)
 }
 
 /// Parse an optional config string into a path (None if missing or blank).
@@ -129,7 +164,7 @@ mod tests {
         std::fs::write(md.join("2026-07-20/.complete"), "").unwrap();
         std::fs::write(md.join(".summarize-week.lock"), "").unwrap();
 
-        render_html_tree(&md, &html, "Weekly Summaries").unwrap();
+        render_html_tree(&md, &html, HtmlRenderOpts::new("Weekly Summaries")).unwrap();
 
         let root = std::fs::read_to_string(html.join("index.html")).unwrap();
         let week = std::fs::read_to_string(html.join("2026-07-20/index.html")).unwrap();
@@ -139,11 +174,18 @@ mod tests {
         assert!(root.contains("href=\"2026-07-20/index.html\""));
         assert!(!root.contains("2026-07-20/index.md"));
         assert!(root.contains("href=\"style.css\""));
+        assert!(root.contains("property=\"og:title\""));
+        assert!(root.contains("property=\"og:description\""));
+        assert!(root.contains("property=\"og:type\" content=\"website\""));
+        assert!(!root.contains("og:url"));
         assert!(week.contains("href=\"thread/foo.html\""));
         assert!(week.contains("href=\"../style.css\""));
+        assert!(week.contains("property=\"og:type\" content=\"article\""));
+        assert!(week.contains("property=\"og:description\""));
         assert!(thread.contains("<code>pnfs</code>"));
         assert!(thread.contains("href=\"https://lore.kernel.org/linux-nfs/x/\""));
         assert!(thread.contains("href=\"../../style.css\""));
+        assert!(thread.contains("property=\"og:title\" content=\"Foo thread\""));
         assert!(css.contains("font-family: var(--mono)"));
         assert!(!html.join("2026-07-20/.complete").exists());
         assert!(!html.join(".summarize-week.lock").exists());
@@ -172,7 +214,7 @@ mod tests {
         )
         .unwrap();
 
-        render_html_tree(&md, &html, "Weekly Summaries").unwrap();
+        render_html_tree(&md, &html, HtmlRenderOpts::new("Weekly Summaries")).unwrap();
 
         let week = std::fs::read_to_string(html.join("2026-07-20/index.html")).unwrap();
         assert!(
@@ -199,9 +241,14 @@ mod tests {
     fn maybe_render_skips_unset() {
         let (md, html) = temp_pair();
         std::fs::write(md.join("index.md"), "# Hi\n").unwrap();
-        maybe_render_html(&md, None, "Weekly Summaries").unwrap();
+        maybe_render_html(&md, None, HtmlRenderOpts::new("Weekly Summaries")).unwrap();
         assert!(!html.join("index.html").exists());
-        maybe_render_html(&md, Some(Path::new("")), "Weekly Summaries").unwrap();
+        maybe_render_html(
+            &md,
+            Some(Path::new("")),
+            HtmlRenderOpts::new("Weekly Summaries"),
+        )
+        .unwrap();
         assert!(!html.join("index.html").exists());
         let _ = std::fs::remove_dir_all(&md);
     }

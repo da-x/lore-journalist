@@ -22,6 +22,8 @@ git_repo_path = "/path/to/linux-nfs.git"
 lore_base_url = "https://lore.kernel.org/linux-nfs/"
 outputs_path = "/path/to/weekly-outputs"   # required for summarize-week
 html_outputs_path = "/path/to/weekly-html" # optional; omit to skip HTML
+html_site_url = "https://example.com/nfs/" # optional; public prefix for og:url / canonical
+html_og_image = "https://example.com/nfs/og.png" # optional; absolute image for Slack cards
 
 [list]
 title = "NFS Mailing List Weekly Summaries"   # root catalog H1
@@ -36,6 +38,8 @@ api_key = "..."
 ```
 
 `outputs_path` is required for `summarize-week` and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/linux-nfs/`).
+
+`html_site_url` is the public prefix of that HTML tree (used only for `og:url` and `<link rel="canonical">`). If it is unset, an `http(s)` `base_url` is used; `base_url = "/"` is ignored. Without a public prefix, pages still get `og:title` / `og:description` / Twitter Card tags. Slack’s crawler must be able to GET the pasted URL — a host that is only reachable on Tailscale will not unfurl from Slack’s cloud.
 
 `[list]` is how the same binary covers different mailing lists: titles go into the markdown catalog and HTML chrome; `name` and `focus` go into the thread and week agent prompts. Omit `[list]` for generic wording (`Mailing List Weekly Summaries` / `this mailing list`).
 
@@ -127,6 +131,8 @@ When `html_outputs_path` is set (or `render-html` is run), markdown is converted
 ```
 
 Relative `.md` hrefs become `.html`; lore permalinks are left absolute. Already-complete weeks are not refreshed by `summarize-week`; use `render-html` to backfill.
+
+Each page `<head>` includes a description, Open Graph tags (`og:title`, `og:description`, `og:type`, `og:site_name`), and Twitter Card tags so Slack and similar clients can unfurl the link. Week and thread pages are `og:type` `article` and, when front matter has `week_ending`, also `article:published_time`. `og:url` / canonical are emitted only when `html_site_url` (or an absolute `base_url`) is set; `og:image` only when `html_og_image` is an absolute `http(s)` URL.
 
 ## Observability
 

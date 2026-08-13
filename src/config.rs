@@ -19,9 +19,45 @@ pub struct Config {
     /// Unset or empty: skip HTML export.
     #[serde(default)]
     pub html_outputs_path: Option<String>,
-    /// Per-list identity and agent briefing (titles, focus). Not NFS-specific.
+    /// Public prefix of the HTML tree for `og:url` / canonical (e.g.
+    /// `https://example.com/nfs/`). Unset: emit title/description tags only.
+    #[serde(default)]
+    pub html_site_url: Option<String>,
+    /// Absolute `http(s)` URL for `og:image`. Ignored if unset or not http(s).
+    #[serde(default)]
+    pub html_og_image: Option<String>,
+    /// Per-list identity and agent briefing (titles, focus).
     #[serde(default)]
     pub list: ListConfig,
+}
+
+impl Config {
+    /// Public HTML site prefix for unfurl canonical/`og:url`.
+    ///
+    /// `html_site_url` wins when set. Otherwise `base_url` is used only if it is
+    /// an `http://` or `https://` URL. Blank, `"/"`, and other relative values
+    /// are treated as unset.
+    pub fn html_public_url(&self) -> Option<&str> {
+        absolute_http_url(self.html_site_url.as_deref())
+            .or_else(|| absolute_http_url(Some(self.base_url.as_str())))
+    }
+
+    /// Absolute `og:image` URL, if configured as `http(s)`.
+    pub fn html_og_image_url(&self) -> Option<&str> {
+        absolute_http_url(self.html_og_image.as_deref())
+    }
+}
+
+fn absolute_http_url(value: Option<&str>) -> Option<&str> {
+    let s = value.map(str::trim).filter(|s| !s.is_empty())?;
+    if s == "/" {
+        return None;
+    }
+    if s.starts_with("http://") || s.starts_with("https://") {
+        Some(s)
+    } else {
+        None
+    }
 }
 
 /// Mailing-list identity used in the catalog, HTML chrome, and agent prompts.
@@ -154,6 +190,70 @@ focus = "Focus heavily on NFS client development and important bug fixes."
                 .week_system_prompt()
                 .contains("NFS client development")
         );
+    }
+
+    #[test]
+    fn html_public_url_ignores_slash_base_url() {
+        let raw = r#"
+git_repo_path = "/repo"
+db_path = "db.sqlite"
+base_url = "/"
+[openai]
+api_base = "https://example"
+model_name = "m"
+api_key = "k"
+"#;
+        let c: Config = toml::from_str(raw).unwrap();
+        assert_eq!(c.html_public_url(), None);
+        assert_eq!(c.html_og_image_url(), None);
+    }
+
+    #[test]
+    fn html_public_url_falls_back_to_absolute_base_url() {
+        let raw = r#"
+git_repo_path = "/repo"
+db_path = "db.sqlite"
+base_url = "https://ex/nfs/"
+[openai]
+api_base = "https://example"
+model_name = "m"
+api_key = "k"
+"#;
+        let c: Config = toml::from_str(raw).unwrap();
+        assert_eq!(c.html_public_url(), Some("https://ex/nfs/"));
+    }
+
+    #[test]
+    fn html_site_url_wins_over_base_url() {
+        let raw = r#"
+git_repo_path = "/repo"
+db_path = "db.sqlite"
+base_url = "https://ex/nfs/"
+html_site_url = "https://public.example/weekly/"
+html_og_image = "https://public.example/og.png"
+[openai]
+api_base = "https://example"
+model_name = "m"
+api_key = "k"
+"#;
+        let c: Config = toml::from_str(raw).unwrap();
+        assert_eq!(c.html_public_url(), Some("https://public.example/weekly/"));
+        assert_eq!(c.html_og_image_url(), Some("https://public.example/og.png"));
+    }
+
+    #[test]
+    fn html_og_image_rejects_relative() {
+        let raw = r#"
+git_repo_path = "/repo"
+db_path = "db.sqlite"
+html_og_image = "og.png"
+[openai]
+api_base = "https://example"
+model_name = "m"
+api_key = "k"
+"#;
+        let c: Config = toml::from_str(raw).unwrap();
+        assert_eq!(c.html_og_image_url(), None);
     }
 }
 

@@ -6,5 +6,6 @@ mod links;
 mod markdown;
 mod page;
 mod render;
+mod unfurl;
 
-pub use render::{html_dir_from_config, maybe_render_html, render_html_tree};
+pub use render::{HtmlRenderOpts, html_dir_from_config, maybe_render_html, render_html_tree};

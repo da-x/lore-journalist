@@ -221,7 +221,9 @@ fn relative_from(from_dir: &Path, to_file: &Path) -> PathBuf {
     out
 }
 
-fn encode_rel_href(rel: &Path) -> String {
+/// Percent-encode each path segment of a relative path (RFC 3986 unreserved
+/// left alone). Thread filenames that already contain `%3C` become `%253C`.
+pub fn encode_rel_href(rel: &Path) -> String {
     let mut parts: Vec<String> = Vec::new();
     for c in rel.components() {
         match c {
