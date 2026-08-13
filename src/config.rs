@@ -15,6 +15,10 @@ pub struct Config {
     pub lore_base_url: String,
     #[serde(default)]
     pub outputs_path: Option<String>,
+    /// Optional directory for generated static HTML (mirrors the markdown tree).
+    /// Unset or empty: skip HTML export.
+    #[serde(default)]
+    pub html_outputs_path: Option<String>,
 }
 
 fn default_base_url() -> String {

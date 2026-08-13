@@ -1,0 +1,264 @@
+/* Single stylesheet for all generated HTML. Relative hrefs only; no site-root URLs. */
+
+:root {
+  --bg: #f6f1e8;
+  --bg-raised: #fffaf1;
+  --ink: #1c1915;
+  --muted: #5c564c;
+  --rule: #d9d0c2;
+  --accent: #0d6b5c;
+  --accent-ink: #085246;
+  --link: #0b4f8a;
+  --link-visited: #5a3d7a;
+  --code-bg: #ece4d6;
+  --quote-bar: #c45c26;
+  --header-bg: #1c1915;
+  --header-ink: #f6f1e8;
+  --header-muted: #c4b8a6;
+  --focus: #0d6b5c;
+  --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --measure: 42rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161411;
+    --bg-raised: #1f1b17;
+    --ink: #eee6d8;
+    --muted: #b3aa9c;
+    --rule: #3a342c;
+    --accent: #5dbead;
+    --accent-ink: #8fd9cc;
+    --link: #7eb6e8;
+    --link-visited: #c4a6e0;
+    --code-bg: #2a251f;
+    --quote-bar: #e0894f;
+    --header-bg: #0d0b09;
+    --header-ink: #eee6d8;
+    --header-muted: #9a9184;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 112.5%;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.15em;
+}
+
+a:visited {
+  color: var(--link-visited);
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.site-header {
+  background: var(--header-bg);
+  color: var(--header-ink);
+  border-bottom: 4px solid var(--accent);
+}
+
+.site-header a {
+  color: var(--header-ink);
+}
+
+.site-header a:visited {
+  color: var(--header-ink);
+}
+
+.site-header__inner {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 0.9rem 1.25rem 1rem;
+}
+
+.site-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.site-title a {
+  text-decoration: none;
+}
+
+.crumbs {
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+  font-size: 0.88rem;
+  color: var(--header-muted);
+}
+
+.crumbs a {
+  color: var(--header-muted);
+}
+
+.crumbs__sep {
+  user-select: none;
+}
+
+main.content {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 1.75rem 1.25rem 3.5rem;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.content h4 {
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.content h1 {
+  margin: 0 0 0.85rem;
+  font-size: 1.85rem;
+}
+
+.content h2 {
+  margin: 2rem 0 0.7rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: 1.25rem;
+}
+
+.content h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.08rem;
+}
+
+.content p,
+.content ul,
+.content ol,
+.content blockquote,
+.content pre,
+.content table {
+  margin: 0 0 1rem;
+}
+
+.content li {
+  margin: 0.2rem 0;
+}
+
+.content li > ul,
+.content li > ol {
+  margin: 0.25rem 0 0.4rem;
+}
+
+.content hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2rem 0;
+}
+
+.content blockquote {
+  margin-left: 0;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left: 3px solid var(--quote-bar);
+  color: var(--muted);
+}
+
+.content blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+code {
+  background: var(--code-bg);
+  padding: 0.12em 0.38em;
+  border-radius: 0.25rem;
+  word-break: break-word;
+}
+
+pre {
+  background: var(--bg-raised);
+  border: 1px solid var(--rule);
+  border-radius: 0.4rem;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.86rem;
+  word-break: normal;
+}
+
+.content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.content th,
+.content td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.content th {
+  font-weight: 650;
+}
+
+.content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.content em {
+  font-style: italic;
+}
+
+.site-footer {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 0 1.25rem 2.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}

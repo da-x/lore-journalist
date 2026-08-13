@@ -5,6 +5,7 @@ mod db;
 mod email_index;
 mod git_handler;
 mod grep_cmd;
+mod html;
 mod ids;
 mod lock;
 mod lore;
@@ -62,6 +63,17 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         prepare_only: bool,
     },
+    /// Convert published markdown under outputs_path into static HTML.
+    ///
+    /// Requires `outputs_path`. HTML dest is `html_outputs_path` or `--html-dir`.
+    RenderHtml {
+        /// Override config.html_outputs_path.
+        #[arg(long)]
+        html_dir: Option<PathBuf>,
+        /// Override config.outputs_path.
+        #[arg(long)]
+        outputs: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -95,6 +107,9 @@ async fn main() -> Result<()> {
         } => {
             summarize_week_cmd(config, start_week.as_deref(), week.as_deref(), prepare_only)
                 .await?;
+        }
+        Commands::RenderHtml { html_dir, outputs } => {
+            render_html_cmd(&config, outputs, html_dir)?;
         }
     }
 
@@ -131,7 +146,7 @@ async fn summarize_week_cmd(
         opts,
     )
     .await?;
-    match result {
+    match &result {
         MaterializeResult::AlreadyComplete { week } => {
             info!(%week, "already complete; nothing to do");
         }
@@ -169,6 +184,45 @@ async fn summarize_week_cmd(
             );
         }
     }
+
+    let html_dir = crate::html::html_dir_from_config(&config.html_outputs_path);
+    let published = matches!(
+        result,
+        MaterializeResult::EmptyWeekComplete { .. }
+            | MaterializeResult::AgentsFinished {
+                week_complete: true,
+                ..
+            }
+    );
+    if published {
+        crate::html::maybe_render_html(&outputs, html_dir)?;
+    }
+    Ok(())
+}
+
+fn render_html_cmd(
+    config: &Config,
+    outputs_override: Option<PathBuf>,
+    html_override: Option<PathBuf>,
+) -> Result<()> {
+    let outputs = match outputs_override {
+        Some(p) => p,
+        None => require_outputs_path(&config.outputs_path)?,
+    };
+    let html_dir = html_override.or_else(|| {
+        crate::html::html_dir_from_config(&config.html_outputs_path).map(PathBuf::from)
+    });
+    let Some(html_dir) = html_dir else {
+        anyhow::bail!(
+            "html_outputs_path is required for render-html (set it in config or pass --html-dir)"
+        );
+    };
+    crate::html::render_html_tree(&outputs, &html_dir)?;
+    info!(
+        outputs = %outputs.display(),
+        html_dir = %html_dir.display(),
+        "render-html finished"
+    );
     Ok(())
 }
 

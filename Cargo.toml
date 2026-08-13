@@ -30,4 +30,5 @@ da-harness = { git = "https://github.com/da-x/da-harness", rev = "1f866f7224d51b
 schemars = "0.8"
 futures = "0.3"
 fs2 = "0.4"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 

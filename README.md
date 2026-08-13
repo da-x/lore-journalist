@@ -1,6 +1,6 @@
 # Weekly mailing-list discussion summarizer
 
-Turns a lore-style git mail archive (ingested into SQLite) into **one completed calendar week** of markdown under `outputs_path`. Agents explore mail and prior summaries via tools, then submit order / thread / week results. Per-message markdown is **not** written; citations are lore.kernel.org permalinks.
+Turns a lore-style git mail archive (ingested into SQLite) into **one completed calendar week** of markdown under `outputs_path`, and optionally a mirrored static HTML tree under `html_outputs_path`. Agents explore mail and prior summaries via tools, then submit order / thread / week results. Per-message markdown is **not** written; citations are lore.kernel.org permalinks.
 
 Design: [`doc/design.md`](doc/design.md).
 
@@ -21,6 +21,7 @@ db_path = ".git/db.sqlite"
 git_repo_path = "/path/to/linux-nfs.git"
 lore_base_url = "https://lore.kernel.org/linux-nfs/"
 outputs_path = "/path/to/weekly-outputs"   # required for summarize-week
+html_outputs_path = "/path/to/weekly-html" # optional; omit to skip HTML
 
 [openai]
 api_base = "https://api.x.ai/v1"
@@ -28,7 +29,7 @@ model_name = "..."
 api_key = "..."
 ```
 
-`outputs_path` is required for `summarize-week`. `lore_base_url` defaults to `https://lore.kernel.org/linux-nfs/`.
+`outputs_path` is required for `summarize-week` and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` defaults to `https://lore.kernel.org/linux-nfs/`.
 
 ## Commands
 
@@ -37,7 +38,8 @@ api_key = "..."
 | `build-db` | Walk the git mail repo and insert cleaned bodies into SQLite |
 | `meta` | Load the email index and print count / date range |
 | `grep PATTERN` | Regex search over composed subject + body |
-| `summarize-week` | Produce **one** week edition (lock, order, serial threads, overview, `.complete`) |
+| `summarize-week` | Produce **one** week edition (lock, order, serial threads, overview, `.complete`); also HTML if `html_outputs_path` is set |
+| `render-html` | Convert the existing markdown tree to static HTML (backfill / CSS refresh) |
 
 ```bash
 cargo run -- --config config.toml build-db
@@ -45,6 +47,8 @@ cargo run -- --config config.toml meta
 cargo run -- --config config.toml grep 'pnfs'
 cargo run -- --config config.toml summarize-week --start-week 2026-07-20
 cargo run -- --config config.toml summarize-week --week 2026-07-20
+cargo run -- --config config.toml render-html
+cargo run -- --config config.toml render-html --html-dir /path/to/weekly-html
 ```
 
 There is **no** `--concurrency` flag. Thread agents always run **serially** in the order from `.thread-order.json`.
@@ -100,6 +104,21 @@ Empty weeks still write a stub `index.md`, update the root catalog, write `.comp
 ```
 
 No `messages/` directory. Cleaned bodies stay in SQLite for inference tools.
+
+### HTML layout
+
+When `html_outputs_path` is set (or `render-html` is run), markdown is converted in-process — no static site generator. One shared `style.css` is written at the HTML root. Intra-site links stay **relative** (the tree does not assume it is mounted at `/`) and always name `index.html` explicitly (directory URLs are not assumed to resolve).
+
+```
+{html_outputs_path}/
+  style.css                         # the one stylesheet
+  index.html                        # from index.md
+  2026-07-20/
+    index.html                      # from 2026-07-20/index.md
+    thread/<stem>.html              # from thread/<stem>.md
+```
+
+Relative `.md` hrefs become `.html`; lore permalinks are left absolute. Already-complete weeks are not refreshed by `summarize-week`; use `render-html` to backfill.
 
 ## Observability
 
