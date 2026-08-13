@@ -4,9 +4,36 @@ use sha2::{Digest, Sha256};
 
 /// Canonical Message-ID form for lookups, tools, front matter, roots, and stems.
 ///
-/// Trims Unicode whitespace only; keeps angle brackets as-is after trim.
+/// Trims Unicode whitespace, then strips trailing list junk (commas, semicolons,
+/// quotes, pipes) that appears in some `References` / LLM outputs — e.g.
+/// `"<id@host>,"` from broken mail clients. Keeps angle brackets as-is after
+/// cleanup. Does **not** alter the interior of a well-formed id.
 pub fn normalize_message_id(id: &str) -> String {
-    id.trim().to_string()
+    let mut s = id.trim().to_string();
+    // Some MUAs append trailing punctuation to Message-IDs in References chains;
+    // without this, the same discussion splits into two roots (`<id>` vs `<id>,`).
+    loop {
+        let before = s.clone();
+        s = s
+            .trim_matches(|c: char| {
+                c.is_whitespace()
+                    || c == ','
+                    || c == ';'
+                    || c == '"'
+                    || c == '\''
+                    || c == '`'
+                    || c == '|'
+            })
+            .to_string();
+        if s.ends_with("...") {
+            s.truncate(s.len() - 3);
+            s = s.trim_end().to_string();
+        }
+        if s == before {
+            break;
+        }
+    }
+    s
 }
 
 /// Percent-encode a normalized id (RFC 3986 unreserved characters left alone).
@@ -63,6 +90,20 @@ mod tests {
             normalize_message_id("\u{00A0}<id@host>\u{00A0}"),
             "<id@host>"
         );
+    }
+
+    #[test]
+    fn normalize_strips_trailing_comma_junk() {
+        // Observed in Neil Brown replies' References chains for this corpus.
+        assert_eq!(
+            normalize_message_id("<20260108004016.3907158-1-cel@kernel.org>,"),
+            "<20260108004016.3907158-1-cel@kernel.org>"
+        );
+        assert_eq!(
+            normalize_message_id(" <abc@def.com>, "),
+            "<abc@def.com>"
+        );
+        assert_eq!(normalize_message_id("<a@b>;"), "<a@b>");
     }
 
     #[test]

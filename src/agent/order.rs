@@ -61,8 +61,27 @@ pub fn load_valid_thread_order(
                     dropped_unknown = report.dropped_unknown.len(),
                     dropped_dupes = report.dropped_duplicates,
                     appended = report.appended.len(),
-                    "repaired .thread-order.json on load"
+                    "repaired .thread-order.json on load; rewriting"
                 );
+                // Persist the cleaned permutation so resume does not re-repair forever
+                // and so operators inspecting the file see the real order.
+                let notes = file.notes.map(|n| {
+                    if n.contains("[host-repaired order]") {
+                        n
+                    } else {
+                        format!("{n} [host-repaired order]")
+                    }
+                });
+                if let Err(e) = write_thread_order_file(
+                    outputs_path,
+                    week,
+                    &ThreadOrderPayload {
+                        ordered_root_ids: order.clone(),
+                        notes: notes.or_else(|| Some("host-repaired order".into())),
+                    },
+                ) {
+                    warn!(%week, error = %e, "failed to rewrite repaired .thread-order.json");
+                }
             } else {
                 info!(%week, "reusing valid .thread-order.json");
             }
@@ -91,33 +110,9 @@ pub fn write_thread_order_file(
     Ok(())
 }
 
-/// Strip common LLM junk around Message-IDs (trailing commas, quotes, etc.).
+/// Strip common LLM / header junk around Message-IDs (delegates to `normalize_message_id`).
 pub fn sanitize_root_id(id: &str) -> String {
-    let mut s = normalize_message_id(id);
-    // Repeatedly strip trailing junk the model often appends in JSON/lists.
-    loop {
-        let before = s.clone();
-        s = s
-            .trim_matches(|c: char| {
-                c.is_whitespace()
-                    || c == ','
-                    || c == ';'
-                    || c == '"'
-                    || c == '\''
-                    || c == '`'
-                    || c == '|'
-            })
-            .to_string();
-        // Trailing ellipsis / "..."
-        if s.ends_with("...") {
-            s.truncate(s.len() - 3);
-            s = s.trim_end().to_string();
-        }
-        if s == before {
-            break;
-        }
-    }
-    s
+    normalize_message_id(id)
 }
 
 #[derive(Debug, Default, Clone)]

@@ -338,7 +338,9 @@ pub async fn run_agents_for_week(
         match result {
             Ok(_) => threads_ok += 1,
             Err(e) => {
-                error!(root = %root, error = %e, "thread agent failed");
+                // Include the full error chain in logs — timeouts vs missing submit
+                // are otherwise hard to distinguish from the final bail alone.
+                error!(root = %root, error = %e, error_debug = ?e, "thread agent failed");
                 failed_thread_ids.push(root.clone());
             }
         }
@@ -352,7 +354,7 @@ pub async fn run_agents_for_week(
         warn!(?failed_thread_ids, "failed_thread_ids");
         bail!(
             "thread agents incomplete: failed={threads_failed} ids={failed_thread_ids:?}; \
-             overview and .complete withheld"
+             overview and .complete withheld (re-run summarize-week to resume missing threads)"
         );
     }
 
