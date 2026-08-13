@@ -2,6 +2,7 @@
 //! we convert files ourselves, write one shared stylesheet, and keep every
 //! intra-site href relative to the current page.
 
+mod links;
 mod markdown;
 mod page;
 mod render;

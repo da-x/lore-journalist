@@ -1,10 +1,11 @@
 //! Walk a markdown outputs tree and write a mirrored HTML tree plus `style.css`.
 
+use super::links::fix_html_links;
 use super::markdown::convert_markdown_document;
 use super::page::wrap_page;
 use crate::outputs::write_atomic;
 use anyhow::{Context, Result, bail};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 use walkdir::WalkDir;
 
@@ -24,6 +25,7 @@ pub fn render_html_tree(md_root: &Path, html_root: &Path) -> Result<()> {
         .with_context(|| format!("write {}/style.css", html_root.display()))?;
 
     let mut pages = 0usize;
+    let mut written: Vec<PathBuf> = Vec::new();
     let walker = WalkDir::new(md_root).follow_links(false).into_iter();
     for entry in walker.filter_entry(|e| {
         e.file_name()
@@ -48,8 +50,12 @@ pub fn render_html_tree(md_root: &Path, html_root: &Path) -> Result<()> {
         let page = wrap_page(&title, rel, &body);
         let dest = html_root.join(rel).with_extension("html");
         write_atomic(&dest, &page).with_context(|| format!("write {}", dest.display()))?;
+        written.push(rel.with_extension("html"));
         pages += 1;
     }
+
+    fix_html_links(html_root, &written)
+        .with_context(|| format!("fix intra-links under {}", html_root.display()))?;
 
     info!(
         html_root = %html_root.display(),
@@ -139,6 +145,49 @@ mod tests {
         assert!(css.contains("font-family: var(--mono)"));
         assert!(!html.join("2026-07-20/.complete").exists());
         assert!(!html.join(".summarize-week.lock").exists());
+
+        let _ = std::fs::remove_dir_all(&md);
+        let _ = std::fs::remove_dir_all(&html);
+    }
+
+    #[test]
+    fn percent_encoded_thread_hrefs_are_double_encoded_for_urls() {
+        let (md, html) = temp_pair();
+        let stem = "%3C57c6f8f6464f7ba0c0455875d4c53a0f9bf01a2c.camel%40kernel.org%3E";
+        std::fs::write(
+            md.join("index.md"),
+            format!("# Catalog\n\n- [Week](2026-07-20/index.md)\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            md.join("2026-07-20/index.md"),
+            format!("# Week\n\n[GIT PULL](thread/{stem}.md)\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            md.join("2026-07-20/thread").join(format!("{stem}.md")),
+            "# GIT PULL\n\nbody\n",
+        )
+        .unwrap();
+
+        render_html_tree(&md, &html).unwrap();
+
+        let week = std::fs::read_to_string(html.join("2026-07-20/index.html")).unwrap();
+        assert!(
+            week.contains(
+                "href=\"thread/%253C57c6f8f6464f7ba0c0455875d4c53a0f9bf01a2c.camel%2540kernel.org%253E.html\""
+            ),
+            "expected URL-encoded href, got: {week}"
+        );
+        assert!(
+            !week.contains("href=\"thread/%3C57c6"),
+            "href still has a single-encoded filename: {week}"
+        );
+        assert!(
+            html.join("2026-07-20/thread")
+                .join(format!("{stem}.html"))
+                .is_file()
+        );
 
         let _ = std::fs::remove_dir_all(&md);
         let _ = std::fs::remove_dir_all(&html);
