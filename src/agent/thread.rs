@@ -131,9 +131,10 @@ pub fn build_thread_user_message(
            Example: [As mentioned by Alice](id://example-msg-id).\n\
          - The message-id should be taken exactly from the Message-ID header provided by tools\n\
            or listed below (normalized form, e.g. <...@...>).\n\
-         - Use GetEmail / ListThreadMessages to load message bodies; do not invent content.\n\
+         - This week's in-window message bodies are included below when they fit. Use GetEmail /\n\
+           ListThreadMessages for anything omitted or for earlier history; do not invent content.\n\
          - When finished, call SubmitThreadSummary exactly once with a non-empty markdown_body\n\
-           (and a short title).\n\
+           (and a short title). Writing the summary as assistant text does not complete the task.\n\
          \n",
     );
 
@@ -186,6 +187,61 @@ pub fn build_thread_user_message(
     ));
     s.push_str("\nSummarize this thread using the tools as needed, then SubmitThreadSummary.\n");
     s
+}
+
+/// Budget for cleaned in-week bodies injected into the thread-agent prompt.
+const IN_WEEK_BODY_BUDGET: usize = 24 * 1024;
+
+/// Format this week's cleaned bodies for the thread prompt (size-capped).
+pub(crate) async fn format_in_week_bodies(
+    pool: &sqlx::SqlitePool,
+    index: &EmailIndex,
+    thread: &ActiveThread,
+    max_bytes: usize,
+) -> Result<String> {
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+
+    for &idx in &thread.message_indices {
+        let m = &index.emails()[idx];
+        let body = index
+            .load_body(pool, &m.message_id)
+            .await
+            .with_context(|| format!("load_body for prompt {}", m.message_id))?;
+        let chunk = format!(
+            "----- Message-ID: {}\nFrom: {}\nDate: {}\nSubject: {}\n\n{}\n",
+            m.message_id,
+            m.from,
+            m.date.to_rfc3339(),
+            m.subject,
+            body
+        );
+        if used > 0 && used + chunk.len() > max_bytes {
+            omitted += 1;
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str(
+                "\nThis week's message bodies (cleaned; patch diffs omitted at ingest):\n",
+            );
+        }
+        if used == 0 && chunk.len() > max_bytes {
+            let keep = max_bytes.saturating_sub(80);
+            out.push_str(&chunk[..chunk.len().min(keep)]);
+            out.push_str("\n[... truncated; use GetEmail for the rest ...]\n");
+            omitted += thread.message_indices.len().saturating_sub(1);
+            break;
+        }
+        out.push_str(&chunk);
+        used += chunk.len();
+    }
+    if omitted > 0 {
+        out.push_str(&format!(
+            "({omitted} further in-week bodies omitted for size; use GetEmail)\n"
+        ));
+    }
+    Ok(out)
 }
 
 /// Format and write `thread/<stem>.md` from agent payload + host message list.
@@ -273,7 +329,7 @@ pub async fn run_thread_agent(
     let prior = find_prior_thread_summaries(&outputs_path, week, &thread.root_id, 3);
     let same = same_week_predecessors(&outputs_path, week, ordered_roots, &thread.root_id);
     let lore = ctx.lore_base_url.clone();
-    let user = build_thread_user_message(
+    let mut user = build_thread_user_message(
         week,
         thread,
         index,
@@ -284,6 +340,10 @@ pub async fn run_thread_agent(
         &same,
         &ctx.list.focus,
     );
+    let bodies = format_in_week_bodies(&ctx.pool, index, thread, IN_WEEK_BODY_BUDGET)
+        .await
+        .context("preload in-week bodies for thread prompt")?;
+    user.push_str(&bodies);
 
     let system = ctx.list.thread_system_prompt();
     let ctx = ctx.with_focus(Some(thread.root_id.clone()));
@@ -313,6 +373,8 @@ pub async fn run_thread_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{insert_test_email, open_in_memory};
+    use crate::summarize::select_active_threads;
 
     #[test]
     fn rewrites_id_links_to_lore() {
@@ -321,5 +383,70 @@ mod tests {
         assert!(out.contains("](https://lore.kernel.org/linux-nfs/abc@def.com/)"));
         assert!(out.contains("](https://lore.kernel.org/linux-nfs/foo@bar/)"));
         assert!(!out.contains("id://"));
+    }
+
+    #[tokio::test]
+    async fn format_in_week_bodies_includes_cleaned_text() {
+        let pool = open_in_memory().await.unwrap();
+        insert_test_email(
+            &pool,
+            " <solo@t>",
+            "Solo thread",
+            "alice@ex.com",
+            "2026-07-18T12:00:00+00:00",
+            "important body line\n",
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+        let index = EmailIndex::load(&pool).await.unwrap();
+        let week = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let active = select_active_threads(&index, week);
+        let text = format_in_week_bodies(&pool, &index, &active[0], 24 * 1024)
+            .await
+            .unwrap();
+        assert!(text.contains("important body line"));
+        assert!(text.contains("Message-ID: <solo@t>"));
+    }
+
+    #[tokio::test]
+    async fn format_in_week_bodies_omits_when_over_budget() {
+        let pool = open_in_memory().await.unwrap();
+        insert_test_email(
+            &pool,
+            " <a@t>",
+            "First",
+            "a@b",
+            "2026-07-16T00:00:00+00:00",
+            "aaaa\n",
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+        insert_test_email(
+            &pool,
+            " <b@t>",
+            "Re: First",
+            "a@b",
+            "2026-07-17T00:00:00+00:00",
+            "bbbb\n",
+            Some(" <a@t>"),
+            r#"[" <a@t>"]"#,
+        )
+        .await
+        .unwrap();
+        let index = EmailIndex::load(&pool).await.unwrap();
+        let week = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let active = select_active_threads(&index, week);
+        // Budget 1 forces the first-message truncate path.
+        let text = format_in_week_bodies(&pool, &index, &active[0], 1)
+            .await
+            .unwrap();
+        assert!(
+            text.contains("truncated") || text.contains("omitted"),
+            "expected size cap notice: {text}"
+        );
     }
 }

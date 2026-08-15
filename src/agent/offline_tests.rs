@@ -375,8 +375,8 @@ mod tests {
             let body = body.clone();
             async move {
                 if n == 0 {
-                    // First thread: agent error (offline text-without-submit would
-                    // wait on the incoming channel until the 15m timeout).
+                    // First thread: agent error (text-without-submit is covered
+                    // separately; it now fail-fasts after idle nudges).
                     Err(anyhow::anyhow!("offline boom"))
                 } else if n == 1 {
                     Ok(assistant_tool_calls(vec![tool_call(
@@ -432,6 +432,156 @@ mod tests {
             !out.join("2026-07-20/thread")
                 .join(format!("{fail_stem}.md"))
                 .is_file()
+        );
+
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[tokio::test]
+    async fn idle_text_without_submit_is_nudged_then_succeeds() {
+        let pool = open_in_memory().await.unwrap();
+        insert_test_email(
+            &pool,
+            " <solo@t>",
+            "Solo thread",
+            "alice@ex.com",
+            "2026-07-18T12:00:00+00:00",
+            "important body\n",
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+
+        let index = Arc::new(EmailIndex::load(&pool).await.unwrap());
+        let week = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let out = temp_out();
+        std::fs::create_dir_all(out.join("2026-07-20/thread")).unwrap();
+
+        let active = select_active_threads(&index, week);
+        let thread = &active[0];
+        let order = vec![thread.root_id.clone()];
+        let ctx = ToolCtx::new(
+            pool.clone(),
+            index.clone(),
+            out.clone(),
+            week,
+            week_window(week),
+        );
+
+        let body = serde_json::json!({
+            "title": "Nudged summary",
+            "markdown_body": "Submitted after the host nudge.",
+            "key_message_ids": ["<solo@t>"]
+        })
+        .to_string();
+        let call = Arc::new(AtomicUsize::new(0));
+        let cb: InferenceCallback = Arc::new(move |_msgs| {
+            let n = call.fetch_add(1, Ordering::SeqCst);
+            let body = body.clone();
+            async move {
+                if n == 0 {
+                    Ok(da_harness::multi_tool::assistant_text(
+                        "Here is the summary as plain text, forgetting the tool.",
+                    ))
+                } else if n == 1 {
+                    Ok(assistant_tool_calls(vec![tool_call(
+                        "1",
+                        "SubmitThreadSummary",
+                        &body,
+                    )]))
+                } else {
+                    Ok(da_harness::multi_tool::assistant_text("ok"))
+                }
+            }
+            .boxed()
+        });
+
+        let started = std::time::Instant::now();
+        let path = run_thread_agent(
+            ctx,
+            week,
+            thread,
+            index.as_ref(),
+            &order,
+            1,
+            1,
+            None,
+            Some(cb),
+            crate::agent::session::UsageTotals::new(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "idle nudge must not wait for the 15m timeout"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("Nudged summary"));
+        assert!(text.contains("Submitted after the host nudge"));
+
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[tokio::test]
+    async fn idle_text_without_submit_fail_fasts() {
+        let pool = open_in_memory().await.unwrap();
+        insert_test_email(
+            &pool,
+            " <solo@t>",
+            "Solo thread",
+            "alice@ex.com",
+            "2026-07-18T12:00:00+00:00",
+            "important body\n",
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+
+        let index = Arc::new(EmailIndex::load(&pool).await.unwrap());
+        let week = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let out = temp_out();
+        std::fs::create_dir_all(out.join("2026-07-20/thread")).unwrap();
+
+        let active = select_active_threads(&index, week);
+        let thread = &active[0];
+        let order = vec![thread.root_id.clone()];
+        let ctx = ToolCtx::new(pool, index.clone(), out.clone(), week, week_window(week));
+
+        let cb: InferenceCallback = Arc::new(move |_msgs| {
+            async move {
+                Ok(da_harness::multi_tool::assistant_text(
+                    "I will not call the submit tool.",
+                ))
+            }
+            .boxed()
+        });
+
+        let started = std::time::Instant::now();
+        let err = run_thread_agent(
+            ctx,
+            week,
+            thread,
+            index.as_ref(),
+            &order,
+            1,
+            1,
+            None,
+            Some(cb),
+            crate::agent::session::UsageTotals::new(),
+        )
+        .await
+        .expect_err("text-only agent must fail");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "must fail-fast after idle nudges, not wait 15m; elapsed={elapsed:?}"
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("without calling submit"),
+            "expected no-submit error: {msg}"
         );
 
         let _ = std::fs::remove_dir_all(&out);

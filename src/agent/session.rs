@@ -1,17 +1,36 @@
 //! Multi-tool session runner with submit-slot completion and hard timeout (KD14).
+//!
+//! If the model replies with text and goes idle without calling submit, the host
+//! nudges it (up to [`MAX_IDLE_SUBMIT_NUDGES`] times) and then ends the session
+//! as `no submit` instead of waiting out the full timeout. A deadline nudge is
+//! also sent at 80% of the timeout so a tool-call loop can still submit.
 
 use crate::tools::submit::SubmitSlot;
 use anyhow::{Context, Result, anyhow, bail};
-use async_openai::types::ChatCompletionRequestUserMessageContent;
+use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageContent};
 use da_harness::multi_tool::{
-    AgentInvocationArgs, InferenceCallback, Tool, UsageCallback, UserRequest,
+    AgentInvocationArgs, InferenceCallback, TaskFuture, Tool, UsageCallback, UserRequest,
 };
 use da_harness::{OpenAIClient, TokenUsage};
+use futures::FutureExt;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::{info, warn};
+
+/// How many times to remind an idle agent to call the submit tool before
+/// ending the session as `no submit` instead of waiting out the hard timeout.
+pub const MAX_IDLE_SUBMIT_NUDGES: u32 = 2;
+
+/// Fraction of the session timeout after which a still-running agent is told
+/// to submit with whatever it has (covers tool-call loops that never go idle).
+const DEADLINE_NUDGE_FRACTION: f32 = 0.8;
+
+const SUBMIT_NUDGE: &str = "You have not called the submit tool yet. \
+Call it now with the required fields. Do not reply with only text. \
+If you already drafted a title and body in a previous message, submit that content.";
 
 pub const ORDER_AGENT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 pub const THREAD_AGENT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -155,6 +174,8 @@ pub async fn run_until_submit<T: Clone + Send + 'static>(
     let user_message = user_message.into();
 
     let (tx, rx) = tokio::sync::mpsc::channel(8);
+    let (idle_tx, mut idle_rx) = tokio::sync::mpsc::unbounded_channel();
+    let saw_assistant = Arc::new(AtomicBool::new(false));
 
     let mut args = AgentInvocationArgs::default()
         .system_prompt(system_prompt)
@@ -172,6 +193,28 @@ pub async fn run_until_submit<T: Clone + Send + 'static>(
                     total = u.total_tokens,
                     "llm usage"
                 );
+            });
+            cb
+        })
+        .messages_push_callback({
+            let saw_assistant = saw_assistant.clone();
+            let cb: da_harness::multi_tool::MessagesPushCallback =
+                Arc::new(move |msg: &ChatCompletionRequestMessage| {
+                    if matches!(msg, ChatCompletionRequestMessage::Assistant(_)) {
+                        saw_assistant.store(true, Ordering::SeqCst);
+                    }
+                });
+            cb
+        })
+        .agent_idle_callback({
+            let idle_tx = idle_tx;
+            let cb: Arc<dyn Fn() -> TaskFuture + Send + Sync> = Arc::new(move || {
+                let idle_tx = idle_tx.clone();
+                async move {
+                    let _ = idle_tx.send(());
+                    Ok(())
+                }
+                .boxed()
             });
             cb
         });
@@ -196,6 +239,11 @@ pub async fn run_until_submit<T: Clone + Send + 'static>(
     .await
     .context("send user message to agent")?;
 
+    let started = Instant::now();
+    let deadline_nudge_at = session_timeout.mul_f32(DEADLINE_NUDGE_FRACTION);
+    let mut idle_nudges = 0u32;
+    let mut sent_deadline_nudge = false;
+
     let wait = timeout(session_timeout, async {
         loop {
             if slot.is_filled() {
@@ -204,14 +252,97 @@ pub async fn run_until_submit<T: Clone + Send + 'static>(
             if run_handle.is_finished() {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::select! {
+                biased;
+                ev = idle_rx.recv() => {
+                    match ev {
+                        None => {
+                            // Agent dropped the idle sender; wait for the task to exit.
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        Some(()) => {
+                            if slot.is_filled() {
+                                break;
+                            }
+                            if !saw_assistant.load(Ordering::SeqCst) {
+                                // Idle before the first model turn (waiting for
+                                // the initial user message). Not a missed submit.
+                                continue;
+                            }
+                            if idle_nudges >= MAX_IDLE_SUBMIT_NUDGES {
+                                warn!(
+                                    idle_nudges,
+                                    "agent idle without submit; ending session"
+                                );
+                                break;
+                            }
+                            idle_nudges += 1;
+                            info!(idle_nudges, "nudging idle agent to call submit");
+                            if tx
+                                .send(UserRequest::Message(
+                                    ChatCompletionRequestUserMessageContent::Text(
+                                        SUBMIT_NUDGE.to_string(),
+                                    ),
+                                ))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    if sent_deadline_nudge || slot.is_filled() {
+                        continue;
+                    }
+                    if started.elapsed() >= deadline_nudge_at {
+                        sent_deadline_nudge = true;
+                        info!(
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            "deadline nudge to call submit"
+                        );
+                        let _ = tx
+                            .send(UserRequest::Message(
+                                ChatCompletionRequestUserMessageContent::Text(
+                                    SUBMIT_NUDGE.to_string(),
+                                ),
+                            ))
+                            .await;
+                    }
+                }
+            }
         }
     })
     .await;
 
     drop(tx);
 
-    let run_res = run_handle.await.context("agent task join")?;
+    // Once submit is filled we already have the payload; abort so a trailing
+    // confirmation turn cannot delay the host. Otherwise give the loop a
+    // moment to see the closed incoming channel (fail-fast / timeout).
+    let run_res = if slot.is_filled() {
+        run_handle.abort();
+        match run_handle.await {
+            Ok(r) => r,
+            Err(e) if e.is_cancelled() => Ok(()),
+            Err(e) => return Err(e).context("agent task join"),
+        }
+    } else {
+        let mut run_handle = run_handle;
+        tokio::select! {
+            joined = &mut run_handle => joined.context("agent task join")?,
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                warn!("agent still running after session end; aborting task");
+                run_handle.abort();
+                match run_handle.await {
+                    Ok(r) => r,
+                    Err(e) if e.is_cancelled() => Ok(()),
+                    Err(e) => return Err(e).context("agent task join"),
+                }
+            }
+        }
+    };
 
     match wait {
         Err(_) => {
