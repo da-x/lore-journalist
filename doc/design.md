@@ -840,7 +840,7 @@ All tools return `Result<String>` for the model. Tool arg message ids are **norm
 |---|---|---|---|
 | `GrepEmails` | `pattern`, `thread_root_id?`, `date_from?`, `date_to?`, `max_matches?` | Regex over subject+body | **Defaults (KD20):** if `focus_thread_root` set and agent omits `thread_root_id`, use focus; if dates omitted under focus, default to current `week_window`. Cap matches default 50 (20 if cross-thread). Hard cap **200 bodies scanned**; then truncation notice. No `load_all_bodies`. |
 | `GetEmail` | `message_id` | Full email from DB | Normalize input → `index.get` → `load_body` with **`message_id_raw`** SQL bind. Error if missing. Return **normalized** id only in headers (never raw PK). |
-| `ListThreadMessages` | `thread_root_id?`, `date_from?`, `date_to?` | Chronological metadata list | Default root to focus when set. Include normalized `message_id`, date, from, subject, `file_stem`, `in_week`. Never expose `message_id_raw`. |
+| `ListThreadMessages` | `thread_root_id?`, `date_from?`, `date_to?` | Chronological metadata list | Default root to focus when set. Include normalized `message_id`, `in_reply_to`, date, from, subject, `file_stem`, `in_week`. Never expose `message_id_raw`. |
 | `GrepOutputs` | `pattern`, `glob?`, `max_matches?` | Regex under outputs | Sandboxed paths; relative results. |
 | `GlobOutputs` | `pattern` | Glob under outputs | e.g. `*/thread/<stem>.md`. |
 | `ReadOutputFile` | `path` | Read relative path | See path sandbox algorithm below. Cap 256 KiB. |

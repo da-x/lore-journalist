@@ -45,7 +45,7 @@ pub struct GetEmail {
     pub message_id: String,
 }
 
-/// List metadata for messages in a thread.
+/// List chronological metadata for messages in a thread (including In-Reply-To).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ListThreadMessages {
     /// Thread root Message-ID; defaults to session focus when set.

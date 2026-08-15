@@ -21,7 +21,8 @@ pub struct ListThreadMessagesArgs {
 
 /// List messages in a thread (metadata only — no bodies).
 ///
-/// Never exposes `message_id_raw`. Includes lore URL, file_stem, in_week.
+/// Never exposes `message_id_raw`. Includes lore URL, file_stem, in_week,
+/// and normalized `in_reply_to` (empty when the message has no parent).
 pub async fn list_thread_messages(ctx: &ToolCtx, args: ListThreadMessagesArgs) -> Result<String> {
     let root = resolve_thread_root(ctx, args.thread_root_id.as_deref())?;
     let (filter_start, filter_end) = date_bounds(args.date_from, args.date_to);
@@ -50,11 +51,18 @@ pub async fn list_thread_messages(ctx: &ToolCtx, args: ListThreadMessagesArgs) -
         let in_week = m.date >= week_start && m.date < week_end;
         let lore = lore_url_for_message_id(&ctx.lore_base_url, &m.message_id);
         let stem = file_stem_for_id(&m.message_id);
+        let in_reply_to = m
+            .in_reply_to
+            .as_deref()
+            .map(normalize_message_id)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
         out.push_str(&format!(
-            "- date={} from={} message_id={} file_stem={} in_week={} lore={}\n  subject={}\n",
+            "- date={} from={} message_id={} in_reply_to={} file_stem={} in_week={} lore={}\n  subject={}\n",
             m.date.to_rfc3339(),
             m.from,
             m.message_id,
+            in_reply_to,
             stem,
             in_week,
             lore,
@@ -170,11 +178,13 @@ mod tests {
         assert!(out.contains("Messages: 2"));
         assert!(out.contains("message_id=<root@t>"));
         assert!(out.contains("message_id=<child@t>"));
+        assert!(out.contains("in_reply_to=<root@t>"));
         assert!(out.contains("in_week=true"));
         assert!(out.contains("lore=https://lore.kernel.org/linux-nfs/root@t/"));
         assert!(!out.contains("message_id_raw"));
-        // Normalized ids only — never leading-space PK form after `message_id=`.
+        // Normalized ids only — never leading-space PK form after `message_id=` / `in_reply_to=`.
         assert!(!out.contains("message_id= <"));
+        assert!(!out.contains("in_reply_to= <"));
     }
 
     #[tokio::test]
