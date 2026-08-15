@@ -20,6 +20,7 @@ pub struct HtmlRenderOpts<'a> {
 }
 
 impl<'a> HtmlRenderOpts<'a> {
+    #[allow(unused)] // TODO
     pub fn new(site_title: &'a str) -> Self {
         Self {
             site_title,

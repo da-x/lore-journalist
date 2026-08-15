@@ -17,6 +17,7 @@ pub struct PageMeta<'a> {
 }
 
 impl<'a> PageMeta<'a> {
+    #[allow(unused)] // TODO
     pub fn basic(title: &'a str, site_title: &'a str) -> Self {
         Self {
             title,
