@@ -220,8 +220,8 @@ mod tests {
         let meta = PageMeta {
             title: "Quiet week",
             description: "Twelve client fixes landed.",
-            site_title: "NFS Weekly Summaries",
-            site_url: Some("https://ex/nfs/"),
+            site_title: "Weekly Summaries",
+            site_url: Some("https://ex/weekly/"),
             og_image: None,
             week_ending: Some("2026-07-20"),
         };
@@ -230,8 +230,10 @@ mod tests {
             week.contains("property=\"og:description\" content=\"Twelve client fixes landed.\"")
         );
         assert!(week.contains("property=\"og:type\" content=\"article\""));
-        assert!(week.contains("property=\"og:site_name\" content=\"NFS Weekly Summaries\""));
-        assert!(week.contains("rel=\"canonical\" href=\"https://ex/nfs/2026-07-20/index.html\""));
+        assert!(week.contains("property=\"og:site_name\" content=\"Weekly Summaries\""));
+        assert!(
+            week.contains("rel=\"canonical\" href=\"https://ex/weekly/2026-07-20/index.html\"")
+        );
         assert!(
             week.contains("property=\"article:published_time\" content=\"2026-07-20T00:00:00Z\"")
         );
@@ -244,7 +246,7 @@ mod tests {
             title: "GIT PULL",
             description: "Bugfixes.",
             site_title: "Weekly Summaries",
-            site_url: Some("http://host/nfs/"),
+            site_url: Some("http://host/weekly/"),
             og_image: None,
             week_ending: None,
         };
@@ -255,11 +257,11 @@ mod tests {
         );
         assert!(
             thread.contains(
-                "href=\"http://host/nfs/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html\""
+                "href=\"http://host/weekly/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html\""
             ),
             "{thread}"
         );
-        assert!(thread.contains("property=\"og:url\" content=\"http://host/nfs/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html\""));
+        assert!(thread.contains("property=\"og:url\" content=\"http://host/weekly/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html\""));
     }
 
     #[test]

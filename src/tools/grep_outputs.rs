@@ -116,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn grep_finds_line_in_thread_md() {
         let mut root = std::env::temp_dir();
-        root.push(format!("nfs-grepo-{}", std::process::id()));
+        root.push(format!("lore-grepo-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("2026-07-20/thread")).unwrap();
         std::fs::write(

@@ -34,7 +34,7 @@ mod tests {
     fn temp_out() -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "nfs-agent-{}-{}",
+            "lore-agent-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -201,7 +201,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("Solo summary"));
         assert!(text.contains("moved forward"));
-        assert!(text.contains("lore.kernel.org/linux-nfs/solo@t"));
+        assert!(text.contains("lore.kernel.org/solo@t"));
 
         // Resume skip
         let path2 = run_thread_agent(
@@ -396,7 +396,7 @@ mod tests {
             &out,
             Some("2026-07-20"),
             None,
-            "https://lore.kernel.org/linux-nfs/",
+            "https://lore.kernel.org/list/",
             &crate::config::ListConfig::default(),
             AgentRunOpts {
                 thread_inference: Some(cb),

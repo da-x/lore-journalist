@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn leaves_external_and_hash_links() {
-        let lore = "https://lore.kernel.org/linux-nfs/abc@def/";
+        let lore = "https://lore.kernel.org/list/abc@def/";
         assert_eq!(rewrite_internal_href(lore), lore);
         assert_eq!(rewrite_internal_href("mailto:a@b"), "mailto:a@b");
         assert_eq!(rewrite_internal_href("#section"), "#section");
@@ -440,11 +440,8 @@ mod tests {
         let html = markdown_to_html_body("[Week](2026-07-20/index.md)");
         assert!(html.contains("href=\"2026-07-20/index.html\""), "{html}");
         assert!(!html.contains(".md\""));
-        let html = markdown_to_html_body("[x](https://lore.kernel.org/linux-nfs/id/)");
-        assert!(
-            html.contains("https://lore.kernel.org/linux-nfs/id/"),
-            "{html}"
-        );
+        let html = markdown_to_html_body("[x](https://lore.kernel.org/list/id/)");
+        assert!(html.contains("https://lore.kernel.org/list/id/"), "{html}");
     }
 
     #[test]
@@ -486,18 +483,18 @@ mod tests {
 
     #[test]
     fn description_uses_subject_when_no_usable_paragraph() {
-        let md = "---\nsubject: \"[GIT PULL] NFS client bugfixes\"\n---\n\n# NFS Client Bugfixes\n\n## Summary\n";
+        let md = "---\nsubject: \"[GIT PULL] client bugfixes\"\n---\n\n# Client Bugfixes\n\n## Summary\n";
         let (fm, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
         let desc = page_description(&fm, strip_front_matter(md).1, &title, FALLBACK_TITLE);
-        assert_eq!(desc, "[GIT PULL] NFS client bugfixes");
+        assert_eq!(desc, "[GIT PULL] client bugfixes");
     }
 
     #[test]
     fn description_strips_markdown_links() {
-        let md = "See [NFS](https://lore.kernel.org/linux-nfs/id/) on the list.\n";
+        let md = "See [the thread](https://lore.kernel.org/list/id/) on the list.\n";
         let (fm, title, _) = convert_markdown_document(md, FALLBACK_TITLE);
         let desc = page_description(&fm, md, &title, FALLBACK_TITLE);
-        assert!(desc.contains("NFS"), "{desc}");
+        assert!(desc.contains("the thread"), "{desc}");
         assert!(!desc.contains("]("), "{desc}");
         assert!(!desc.contains("https://"), "{desc}");
     }

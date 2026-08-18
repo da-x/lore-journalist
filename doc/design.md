@@ -5,7 +5,7 @@
 | **Author** | TBD |
 | **Date** | 2026-08-10 |
 | **Status** | Approved draft (rev 6 — lore links; no message markdown on disk) |
-| **Workspace** | `/home/dan/vd/newnotes/workdirs/nfs-mailing-list-summary/new-code` |
+| **Workspace** | `lore-journalist` |
 | **Location** | `doc/design.md` |
 | **Depends on** | `build-db` SQLite corpus; [da-harness](https://github.com/da-x/da-harness) `r/0.5` (`multi_tool`), pin git rev at implement time |
 
@@ -15,7 +15,7 @@
 
 This project already ingests a lore-style git mail archive into SQLite (`build-db`), indexes threads in memory (`EmailIndex`), and demos regex search (`grep`). Legacy sibling code (`../code/`) produced weekly journalistic summaries with one-shot LLM calls and Hugo publish — but dumped full thread bodies into prompts, had no multi-week memory, and did not expose discovery tools.
 
-This design turns `new-code` into a **weekly discussion summarizer**: for each completed calendar week, the host selects active threads, then runs **da-harness multi_tool agents** in three stages: (1) an **ordering agent** that ranks the week’s discussions by dependency / reading order; (2) **one session per active thread**, executed **strictly serially** in that order; (3) a **week-overview** session. Agents explore mail (cleaned bodies from SQLite) and prior **summary** outputs via tools, then submit results through typed `submit_*` tools. **Per-message markdown is not written** under `outputs_path`; citations link out to [lore.kernel.org](https://lore.kernel.org/) (e.g. `https://lore.kernel.org/linux-nfs/<message-id-without-brackets>/`). Cleaned/trimmed bodies exist only as inference input. Previous week directories are never rewritten. Multi-week threads are handled by reading prior `thread/<id>.md` summaries; same-week threads summarized earlier in the serial order are also readable by later sessions.
+This design turns `new-code` into a **weekly discussion summarizer**: for each completed calendar week, the host selects active threads, then runs **da-harness multi_tool agents** in three stages: (1) an **ordering agent** that ranks the week’s discussions by dependency / reading order; (2) **one session per active thread**, executed **strictly serially** in that order; (3) a **week-overview** session. Agents explore mail (cleaned bodies from SQLite) and prior **summary** outputs via tools, then submit results through typed `submit_*` tools. **Per-message markdown is not written** under `outputs_path`; citations link out to [lore.kernel.org](https://lore.kernel.org/) (e.g. `https://lore.kernel.org/your-list/<message-id-without-brackets>/`). Cleaned/trimmed bodies exist only as inference input. Previous week directories are never rewritten. Multi-week threads are handled by reading prior `thread/<id>.md` summaries; same-week threads summarized earlier in the serial order are also readable by later sessions.
 
 Empty weeks still produce a completed stub edition so auto-advance never stalls. Thread failures continue (resume-friendly) but **never** mark a week complete or run overview until every expected thread file exists and overview succeeds.
 
@@ -28,7 +28,7 @@ Empty weeks still produce a completed stub edition so auto-advance never stalls.
 | Component | Path | Role |
 |---|---|---|
 | CLI | `src/main.rs` | Commands: `BuildDB`, `Meta`, `Grep` |
-| Config | `src/config.rs` | `openai.{api_base,model_name,api_key}`, `git_repo_path`, `db_path`, `base_url`, `lore_base_url` (default `https://lore.kernel.org/linux-nfs/`), `outputs_path: Option<String>` |
+| Config | `src/config.rs` | `openai.{api_base,model_name,api_key}`, `git_repo_path`, `db_path`, `base_url`, `lore_base_url` (default `https://lore.kernel.org/`), `outputs_path: Option<String>` |
 | Git ingest | `src/git_handler.rs` | Walks commits with blob `m`, parses mail, runs `clean_email_body` before DB insert |
 | Body cleaner | `src/content_cleaner.rs` | Strips patch diffs and large quote blocks at ingest |
 | Models | `src/models.rs` | `EmailMessage`, `Thread` |
@@ -130,7 +130,7 @@ Product goal is a **research agent** per discussion that can grep mail, open ind
 | KD17 | **Week agent tools**: `GlobOutputs`, `GrepOutputs`, `ReadOutputFile`, `SubmitWeekOverview` only (no mail tools). Host provides the full thread list + paths in the user message. | Overview should not re-research mail; cheaper and focused. |
 | KD18 | **Root index one-liner**: use `SubmitWeekOverview.headline` (required field). Empty-week stub uses a fixed headline (“No activity”). | No brittle heading parse. |
 | KD19 | **Citations**: messages → absolute lore URLs via `lore_url_for_message_id(lore_base_url, id)` (strip `<>` from normalized Message-ID). Same-week / cross-week **summaries** → relative `thread/<stem>.md` links. Host may post-process leftover `id://` into lore. | Public archive is lore; summaries stay local. |
-| KD25 | **`lore_base_url`**: config default `https://lore.kernel.org/linux-nfs/`. Example: Message-ID `<20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>` → `https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/`. | Matches public lore path convention. |
+| KD25 | **`lore_base_url`**: config default `https://lore.kernel.org/`. Set the list archive prefix, e.g. `https://lore.kernel.org/your-list/`. Example: Message-ID `<20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>` → `https://lore.kernel.org/your-list/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/`. | Matches public lore path convention. |
 | KD20 | **GrepEmails defaults**: when `focus_thread_root` is set and agent omits dates, default date window to current week; hard cap bodies scanned (200) and matches (50). Cross-thread override allowed but more aggressively capped (e.g. 20 matches). | 143k corpus must not thrash. |
 | KD21 | **Submit payload channel**: `Mutex<Option<Payload>>` or `mpsc`; double-submit returns tool error `"already submitted"`. | Aligns with harness stop pattern; no oneshot double-fire panic. |
 | KD22 | **Path sandbox**: reject absolute paths and `..` components; canonicalize `outputs_path` once at start; existing files: canonicalize + prefix check; missing → clear tool error (do not require canonicalize of missing paths). | Unix `canonicalize` existence footgun. |
@@ -381,7 +381,7 @@ Add to `Cargo.toml` in PR1: `sha2 = "0.10"` (or current compatible).
 | Body SQL bind | `" <abc@def.com>"` (= `message_id_raw`) |
 | Front matter / tool result `message_id` | `"<abc@def.com>"` |
 | `file_stem_for_id` | `%3Cabc%40def.com%3E` |
-| Lore URL | `https://lore.kernel.org/linux-nfs/abc@def.com/` |
+| Lore URL | `https://lore.kernel.org/your-list/abc@def.com/` |
 | On-disk (thread only) | `thread/%3Cabc%40def.com%3E.md` when root is this id |
 
 Uniqueness is on the **normalized** form. Hash-stem case: front matter still holds full normalized id (not the raw PK); agents never need `message_id_raw`.
@@ -551,18 +551,18 @@ No messages in the database fell within the UTC window
 ```markdown
 ## Messages this week
 
-- [2026-07-18 Alice — subject](https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/)
+- [2026-07-18 Alice — subject](https://lore.kernel.org/your-list/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/)
 ```
 
 URL construction (`src/lore.rs`):
 
 ```rust
 // normalize → strip <> → join lore_base_url
-// e.g. " <id@x>" → "https://lore.kernel.org/linux-nfs/id@x/"
+// e.g. " <id@x>" → "https://lore.kernel.org/your-list/id@x/"
 fn lore_url_for_message_id(lore_base: &str, message_id: &str) -> String;
 ```
 
-Config: `lore_base_url` (default `https://lore.kernel.org/linux-nfs/`).
+Config: `lore_base_url` (default `https://lore.kernel.org/`; set the list archive prefix, e.g. `https://lore.kernel.org/your-list/`).
 
 #### Step 6a: Ordering agent (KD2, KD14)
 
@@ -648,7 +648,7 @@ prior_summaries:
 
 ## Messages this week
 
-- [2026-07-18 From Name — subject](https://lore.kernel.org/linux-nfs/<bare-message-id>/)
+- [2026-07-18 From Name — subject](https://lore.kernel.org/your-list/<bare-message-id>/)
 - ...
 ```
 
@@ -665,7 +665,7 @@ Message list is **host-generated** with lore URLs (KD19/KD25). Agent narrative c
 5. On success, host writes `W/index.md` = agent body + host TOC; capture `headline` for root index.
 6. On failure/timeout → no root update, no `.complete`, exit non-zero.
 
-Tone reference: `../infer/2026-03-15/_index.md` (journalistic, NFS-focused). Citations: relative links to `thread/<stem>.md`.
+Tone reference: `../infer/2026-03-15/_index.md` (journalistic, list-focused). Citations: relative links to `thread/<stem>.md`.
 
 #### Step 8: Root index + completion (`.complete` last)
 
@@ -675,7 +675,7 @@ Critical section when week fully succeeds (or empty stub):
 2. Regenerate root `index.md` from all week dirs that will be complete (existing `.complete` plus this `W`):
 
 ```markdown
-# NFS Mailing List Weekly Summaries
+# Mailing List Weekly Summaries
 
 - [Week ending 2026-07-20](2026-07-20/index.md) — <SubmitWeekOverview.headline or stub>
 - [Week ending 2026-07-13](2026-07-13/index.md) — ...
@@ -886,7 +886,7 @@ Tests: `../`, absolute `/etc/passwd`, symlink escape if feasible, missing file c
 
 **Thread system prompt (essence):**
 
-- Technical journalist for Linux NFS (tone ~ legacy / `../infer`).
+- Technical journalist covering the mailing list (tone ~ legacy / `../infer`).
 - Scope: this week’s developments in the focused thread; use tools; read host-listed prior summaries first (cross-week and same-week predecessors).
 - Use Message-IDs **exactly as returned** by `ListThreadMessages` / `GetEmail` (already normalized).
 - Cite messages with **lore URLs** (`lore_base_url` + bare Message-ID). Cite same-week / prior **thread summaries** with relative `thread/<stem>.md` (or `../thread/` as appropriate).
@@ -914,7 +914,7 @@ Write the weekly summary, then SubmitThreadSummary.
 
 **Week overview system prompt:**
 
-- Editor role; front-page overview; critical bugs / NFS client focus / trends.
+- Editor role; front-page overview; critical bugs / configured focus / trends.
 - Read listed `thread/*.md` via `ReadOutputFile` as needed; link with relative paths.
 - Host may provide threads in the **ordering agent’s order** for TOC consistency.
 - Call `SubmitWeekOverview` once with `headline` + body.
@@ -998,9 +998,9 @@ Exit codes:
 
 ```toml
 db_path = ".git/db.sqlite"
-git_repo_path = "/path/to/linux-nfs.git"
+git_repo_path = "/path/to/mail-archive.git"
 base_url = "/"
-lore_base_url = "https://lore.kernel.org/linux-nfs/"
+lore_base_url = "https://lore.kernel.org/your-list/"
 outputs_path = "/path/to/weekly-outputs"   # required for summarize-week
 
 [openai]

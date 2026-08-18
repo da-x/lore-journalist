@@ -210,7 +210,7 @@ mod tests {
         for (mid, subj, date, body_txt, irt, refs) in [
             (
                 " <a@t>",
-                "NFS client fix",
+                "client hang fix",
                 "2026-07-16T10:00:00+00:00",
                 "unique_token_alpha appears here\n",
                 None,
@@ -218,7 +218,7 @@ mod tests {
             ),
             (
                 " <b@t>",
-                "Re: NFS client fix",
+                "Re: client hang fix",
                 "2026-07-17T10:00:00+00:00",
                 "reply without the marker\n",
                 Some(" <a@t>"),
@@ -290,7 +290,7 @@ mod tests {
 
         assert!(out.contains("message_id=<a@t>"));
         assert!(out.contains("message_id=<c@t>"));
-        assert!(out.contains("lore=https://lore.kernel.org/linux-nfs/"));
+        assert!(out.contains("lore=https://lore.kernel.org/"));
     }
 
     #[tokio::test]
@@ -302,7 +302,7 @@ mod tests {
         let out = grep_emails(
             &ctx,
             GrepEmailsArgs {
-                pattern: "NFS client".into(),
+                pattern: "client hang".into(),
                 thread_root_id: Some("<a@t>".into()),
                 date_from: None,
                 date_to: None,
@@ -313,7 +313,7 @@ mod tests {
         .unwrap();
 
         assert!(out.contains("[subject]"));
-        assert!(out.contains("NFS client fix"));
+        assert!(out.contains("client hang fix"));
     }
 
     #[tokio::test]

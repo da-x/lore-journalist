@@ -135,9 +135,9 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut md = std::env::temp_dir();
-        md.push(format!("nfs-html-md-{}-{nanos}", std::process::id()));
+        md.push(format!("lore-html-md-{}-{nanos}", std::process::id()));
         let mut html = std::env::temp_dir();
-        html.push(format!("nfs-html-out-{}-{nanos}", std::process::id()));
+        html.push(format!("lore-html-out-{}-{nanos}", std::process::id()));
         let _ = std::fs::remove_dir_all(&md);
         let _ = std::fs::remove_dir_all(&html);
         std::fs::create_dir_all(md.join("2026-07-20/thread")).unwrap();
@@ -149,7 +149,7 @@ mod tests {
         let (md, html) = temp_pair();
         std::fs::write(
             md.join("index.md"),
-            "# NFS Mailing List Weekly Summaries\n\n- [Week ending 2026-07-20](2026-07-20/index.md) — Hello\n",
+            "# Mailing List Weekly Summaries\n\n- [Week ending 2026-07-20](2026-07-20/index.md) — Hello\n",
         )
         .unwrap();
         std::fs::write(
@@ -159,7 +159,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             md.join("2026-07-20/thread/foo.md"),
-            "---\ntitle: \"Foo thread\"\n---\n\n# Foo thread\n\nUse `pnfs` here.\n\n[lore](https://lore.kernel.org/linux-nfs/x/)\n",
+            "---\ntitle: \"Foo thread\"\n---\n\n# Foo thread\n\nUse `ioctl` here.\n\n[lore](https://lore.kernel.org/list/x/)\n",
         )
         .unwrap();
         std::fs::write(md.join("2026-07-20/.complete"), "").unwrap();
@@ -183,8 +183,8 @@ mod tests {
         assert!(week.contains("href=\"../style.css\""));
         assert!(week.contains("property=\"og:type\" content=\"article\""));
         assert!(week.contains("property=\"og:description\""));
-        assert!(thread.contains("<code>pnfs</code>"));
-        assert!(thread.contains("href=\"https://lore.kernel.org/linux-nfs/x/\""));
+        assert!(thread.contains("<code>ioctl</code>"));
+        assert!(thread.contains("href=\"https://lore.kernel.org/list/x/\""));
         assert!(thread.contains("href=\"../../style.css\""));
         assert!(thread.contains("property=\"og:title\" content=\"Foo thread\""));
         assert!(css.contains("font-family: var(--mono)"));

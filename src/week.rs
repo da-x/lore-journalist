@@ -343,7 +343,7 @@ mod tests {
     fn tempfile_dir() -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "nfs-week-test-{}-{}",
+            "lore-week-test-{}-{}",
             std::process::id(),
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         ));

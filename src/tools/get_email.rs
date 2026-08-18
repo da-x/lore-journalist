@@ -118,7 +118,7 @@ mod tests {
 
         assert!(a.contains("Message-ID: <get@test.com>"));
         assert!(!a.contains("Message-ID:  <"));
-        assert!(a.contains("Lore: https://lore.kernel.org/linux-nfs/get@test.com/"));
+        assert!(a.contains("Lore: https://lore.kernel.org/get@test.com/"));
         assert!(a.contains("line one"));
         assert_eq!(a, b);
     }

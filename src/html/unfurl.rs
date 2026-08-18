@@ -153,26 +153,26 @@ mod tests {
     #[test]
     fn joins_and_encodes_thread_path() {
         let url = absolute_page_url(
-            "http://host/nfs/",
+            "http://host/weekly/",
             Path::new("2026-07-20/thread/%3Cfoo%40bar.com%3E.md"),
         )
         .unwrap();
         assert_eq!(
             url,
-            "http://host/nfs/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html"
+            "http://host/weekly/2026-07-20/thread/%253Cfoo%2540bar.com%253E.html"
         );
     }
 
     #[test]
     fn joins_root_index() {
-        let url = absolute_page_url("https://ex/nfs", Path::new("index.md")).unwrap();
-        assert_eq!(url, "https://ex/nfs/index.html");
+        let url = absolute_page_url("https://ex/weekly", Path::new("index.md")).unwrap();
+        assert_eq!(url, "https://ex/weekly/index.html");
     }
 
     #[test]
     fn rejects_non_http_prefix() {
         assert!(absolute_page_url("/", Path::new("index.md")).is_none());
-        assert!(absolute_page_url("nfs/", Path::new("index.md")).is_none());
+        assert!(absolute_page_url("weekly/", Path::new("index.md")).is_none());
     }
 
     #[test]
@@ -194,13 +194,17 @@ mod tests {
             "Desc",
             "Site",
             "article",
-            Some("https://ex/nfs/2026-07-20/index.html"),
+            Some("https://ex/weekly/2026-07-20/index.html"),
             Some("https://ex/og.png"),
             Some("2026-07-20T00:00:00Z"),
         );
-        assert!(html.contains("rel=\"canonical\" href=\"https://ex/nfs/2026-07-20/index.html\""));
         assert!(
-            html.contains("property=\"og:url\" content=\"https://ex/nfs/2026-07-20/index.html\"")
+            html.contains("rel=\"canonical\" href=\"https://ex/weekly/2026-07-20/index.html\"")
+        );
+        assert!(
+            html.contains(
+                "property=\"og:url\" content=\"https://ex/weekly/2026-07-20/index.html\""
+            )
         );
         assert!(html.contains("property=\"og:image\" content=\"https://ex/og.png\""));
         assert!(html.contains("name=\"twitter:card\" content=\"summary_large_image\""));

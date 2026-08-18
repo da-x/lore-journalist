@@ -10,7 +10,7 @@ pub struct Config {
     #[serde(default = "default_base_url")]
     pub base_url: String,
     /// Lore list archive prefix for message citations, e.g.
-    /// `https://lore.kernel.org/linux-nfs/`.
+    /// `https://lore.kernel.org/your-list/`.
     #[serde(default = "default_lore_base_url")]
     pub lore_base_url: String,
     #[serde(default)]
@@ -20,7 +20,7 @@ pub struct Config {
     #[serde(default)]
     pub html_outputs_path: Option<String>,
     /// Public prefix of the HTML tree for `og:url` / canonical (e.g.
-    /// `https://example.com/nfs/`). Unset: emit title/description tags only.
+    /// `https://example.com/weekly/`). Unset: emit title/description tags only.
     #[serde(default)]
     pub html_site_url: Option<String>,
     /// Absolute `http(s)` URL for `og:image`. Ignored if unset or not http(s).
@@ -63,7 +63,7 @@ fn absolute_http_url(value: Option<&str>) -> Option<&str> {
 /// Mailing-list identity used in the catalog, HTML chrome, and agent prompts.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ListConfig {
-    /// Root catalog H1, e.g. `"NFS Mailing List Weekly Summaries"`.
+    /// Root catalog H1, e.g. `"Example Mailing List Weekly Summaries"`.
     #[serde(default = "default_list_title")]
     pub title: String,
     /// HTML header wordmark. Defaults to `title` when omitted or empty.
@@ -173,23 +173,19 @@ api_base = "https://example"
 model_name = "m"
 api_key = "k"
 [list]
-title = "NFS Mailing List Weekly Summaries"
-short_title = "NFS Weekly Summaries"
-name = "the Linux NFS mailing list"
-focus = "Focus heavily on NFS client development and important bug fixes."
+title = "Example Mailing List Weekly Summaries"
+short_title = "Example Weekly Summaries"
+name = "the example mailing list"
+focus = "Focus heavily on core development and important bug fixes."
 "#;
         let c: Config = toml::from_str(raw).unwrap();
-        assert_eq!(c.list.short_title(), "NFS Weekly Summaries");
+        assert_eq!(c.list.short_title(), "Example Weekly Summaries");
         assert!(
             c.list
                 .thread_system_prompt()
-                .contains("the Linux NFS mailing list")
+                .contains("the example mailing list")
         );
-        assert!(
-            c.list
-                .week_system_prompt()
-                .contains("NFS client development")
-        );
+        assert!(c.list.week_system_prompt().contains("core development"));
     }
 
     #[test]
@@ -213,14 +209,14 @@ api_key = "k"
         let raw = r#"
 git_repo_path = "/repo"
 db_path = "db.sqlite"
-base_url = "https://ex/nfs/"
+base_url = "https://ex/weekly/"
 [openai]
 api_base = "https://example"
 model_name = "m"
 api_key = "k"
 "#;
         let c: Config = toml::from_str(raw).unwrap();
-        assert_eq!(c.html_public_url(), Some("https://ex/nfs/"));
+        assert_eq!(c.html_public_url(), Some("https://ex/weekly/"));
     }
 
     #[test]
@@ -228,7 +224,7 @@ api_key = "k"
         let raw = r#"
 git_repo_path = "/repo"
 db_path = "db.sqlite"
-base_url = "https://ex/nfs/"
+base_url = "https://ex/weekly/"
 html_site_url = "https://public.example/weekly/"
 html_og_image = "https://public.example/og.png"
 [openai]

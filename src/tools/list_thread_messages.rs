@@ -180,7 +180,7 @@ mod tests {
         assert!(out.contains("message_id=<child@t>"));
         assert!(out.contains("in_reply_to=<root@t>"));
         assert!(out.contains("in_week=true"));
-        assert!(out.contains("lore=https://lore.kernel.org/linux-nfs/root@t/"));
+        assert!(out.contains("lore=https://lore.kernel.org/root@t/"));
         assert!(!out.contains("message_id_raw"));
         // Normalized ids only — never leading-space PK form after `message_id=` / `in_reply_to=`.
         assert!(!out.contains("message_id= <"));

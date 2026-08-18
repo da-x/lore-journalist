@@ -59,7 +59,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "nfs-lock-{}-{}",
+            "lore-lock-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

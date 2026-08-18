@@ -51,7 +51,7 @@ mod tests {
     #[tokio::test]
     async fn read_happy_and_missing() {
         let mut root = std::env::temp_dir();
-        root.push(format!("nfs-read-{}", std::process::id()));
+        root.push(format!("lore-read-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("w/thread")).unwrap();
         std::fs::write(root.join("w/thread/a.md"), b"hello summary\n").unwrap();

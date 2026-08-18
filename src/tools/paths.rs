@@ -171,7 +171,7 @@ mod tests {
     fn temp_root() -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "nfs-path-test-{}-{}",
+            "lore-path-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

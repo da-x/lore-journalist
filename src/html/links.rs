@@ -282,8 +282,8 @@ mod tests {
         let k = known(&["index.html", "2026-01-15/index.html", "style.css"]);
         let page = Path::new("index.html");
         assert_eq!(
-            rewrite_href("https://lore.kernel.org/linux-nfs/x/", page, &k),
-            "https://lore.kernel.org/linux-nfs/x/"
+            rewrite_href("https://lore.kernel.org/list/x/", page, &k),
+            "https://lore.kernel.org/list/x/"
         );
         assert_eq!(
             rewrite_href("2026-01-15/index.html", page, &k),

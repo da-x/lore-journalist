@@ -311,7 +311,6 @@ mod tests {
     fn root_index_uses_configured_title() {
         let md = format_root_index(&[], "linux-fsdevel Weekly Summaries");
         assert!(md.starts_with("# linux-fsdevel Weekly Summaries\n"));
-        assert!(!md.contains("NFS"));
         assert!(!md.contains("## "));
     }
 
@@ -320,7 +319,7 @@ mod tests {
         let dir = {
             let mut p = std::env::temp_dir();
             p.push(format!(
-                "nfs-root-index-{}-{}",
+                "lore-root-index-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -422,7 +421,7 @@ mod tests {
     #[test]
     fn message_list_uses_lore_urls() {
         let md = format_message_list_lore(
-            "https://lore.kernel.org/linux-nfs/",
+            "https://lore.kernel.org/list/",
             &[(
                 "2026-07-18".into(),
                 "Alice".into(),
@@ -431,7 +430,7 @@ mod tests {
             )],
         );
         assert!(md.contains(
-            "https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
+            "https://lore.kernel.org/list/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
         ));
         assert!(!md.contains("messages/"));
     }

@@ -169,8 +169,8 @@ mod tests {
     #[test]
     fn normalize_strips_re_and_patch() {
         assert_eq!(
-            normalize_subject("Re: [PATCH v2] nfs: fix client hang"),
-            "nfs: fix client hang"
+            normalize_subject("Re: [PATCH v2] net: fix client hang"),
+            "net: fix client hang"
         );
         assert_eq!(normalize_subject("FWD: Hello"), "hello");
     }

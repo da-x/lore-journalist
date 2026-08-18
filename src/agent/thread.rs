@@ -379,9 +379,9 @@ mod tests {
     #[test]
     fn rewrites_id_links_to_lore() {
         let md = r#"[As mentioned by Chuck Lever](id://<abc@def.com>) and [x](id://foo@bar)"#;
-        let out = rewrite_id_links_to_lore(md, "https://lore.kernel.org/linux-nfs/");
-        assert!(out.contains("](https://lore.kernel.org/linux-nfs/abc@def.com/)"));
-        assert!(out.contains("](https://lore.kernel.org/linux-nfs/foo@bar/)"));
+        let out = rewrite_id_links_to_lore(md, "https://lore.kernel.org/list/");
+        assert!(out.contains("](https://lore.kernel.org/list/abc@def.com/)"));
+        assert!(out.contains("](https://lore.kernel.org/list/foo@bar/)"));
         assert!(!out.contains("id://"));
     }
 

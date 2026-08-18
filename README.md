@@ -18,18 +18,18 @@ The binary name is `code` (see `Cargo.toml`). Examples below use `cargo run --`.
 
 ```toml
 db_path = ".git/db.sqlite"
-git_repo_path = "/path/to/linux-nfs.git"
-lore_base_url = "https://lore.kernel.org/linux-nfs/"
+git_repo_path = "/path/to/mail-archive.git"
+lore_base_url = "https://lore.kernel.org/your-list/"
 outputs_path = "/path/to/weekly-outputs"   # required for summarize-week
 html_outputs_path = "/path/to/weekly-html" # optional; omit to skip HTML
-html_site_url = "https://example.com/nfs/" # optional; public prefix for og:url / canonical
-html_og_image = "https://example.com/nfs/og.png" # optional; absolute image for Slack cards
+html_site_url = "https://example.com/weekly/" # optional; public prefix for og:url / canonical
+html_og_image = "https://example.com/weekly/og.png" # optional; absolute image for Slack cards
 
 [list]
-title = "NFS Mailing List Weekly Summaries"   # root catalog H1
-short_title = "NFS Weekly Summaries"          # HTML header; defaults to title
-name = "the Linux NFS mailing list"           # agent role ("covering …")
-focus = "Focus heavily on NFS client development and important bug fixes."
+title = "Example Mailing List Weekly Summaries"   # root catalog H1
+short_title = "Example Weekly Summaries"          # HTML header; defaults to title
+name = "the example mailing list"                 # agent role ("covering …")
+focus = "Focus heavily on core development and important bug fixes."
 
 [openai]
 api_base = "https://api.x.ai/v1"
@@ -37,7 +37,7 @@ model_name = "..."
 api_key = "..."
 ```
 
-`outputs_path` is required for `summarize-week`, `regenerate-root-index`, and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/linux-nfs/`).
+`outputs_path` is required for `summarize-week`, `regenerate-root-index`, and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/`).
 
 `html_site_url` is the public prefix of that HTML tree (used only for `og:url` and `<link rel="canonical">`). If it is unset, an `http(s)` `base_url` is used; `base_url = "/"` is ignored. Without a public prefix, pages still get `og:title` / `og:description` / Twitter Card tags. Slack’s crawler must be able to GET the pasted URL — a host that is only reachable on Tailscale will not unfurl from Slack’s cloud.
 
@@ -57,7 +57,7 @@ api_key = "..."
 ```bash
 cargo run -- --config config.toml build-db
 cargo run -- --config config.toml meta
-cargo run -- --config config.toml grep 'pnfs'
+cargo run -- --config config.toml grep 'regression'
 cargo run -- --config config.toml summarize-week --start-week 2026-07-20
 cargo run -- --config config.toml summarize-week --week 2026-07-20
 cargo run -- --config config.toml regenerate-root-index

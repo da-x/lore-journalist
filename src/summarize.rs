@@ -14,9 +14,7 @@ use crate::outputs::{
     thread_markdown_path, write_complete_marker, write_empty_week_index,
 };
 use crate::tools::ToolCtx;
-use crate::week::{
-    ResolveWeekOutcome, assert_week_ended, resolve_week_from_outputs, week_window,
-};
+use crate::week::{ResolveWeekOutcome, assert_week_ended, resolve_week_from_outputs, week_window};
 use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
 use da_harness::OpenAIClient;
@@ -530,7 +528,7 @@ mod tests {
     fn temp_outputs() -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "nfs-sum-test-{}-{}",
+            "lore-sum-test-{}-{}",
             std::process::id(),
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         ));
@@ -592,7 +590,7 @@ mod tests {
 
         // Lore link shape for host-built message lists.
         let list = format_message_list_lore(
-            "https://lore.kernel.org/linux-nfs/",
+            "https://lore.kernel.org/list/",
             &[(
                 "2026-07-18".into(),
                 "alice@example.com".into(),
@@ -601,14 +599,14 @@ mod tests {
             )],
         );
         assert!(list.contains(
-            "https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
+            "https://lore.kernel.org/list/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
         ));
         assert_eq!(
             lore_url_for_message_id(
-                "https://lore.kernel.org/linux-nfs/",
+                "https://lore.kernel.org/list/",
                 "<20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org>"
             ),
-            "https://lore.kernel.org/linux-nfs/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
+            "https://lore.kernel.org/list/20260720-tcp-read-sock-v2-6-29545d034f3c@kernel.org/"
         );
 
         let _ = fs::remove_dir_all(&out);
@@ -677,7 +675,7 @@ mod tests {
             &out,
             None,
             Some("2026-07-20"),
-            "https://lore.kernel.org/linux-nfs/",
+            "https://lore.kernel.org/list/",
             &crate::config::ListConfig::default(),
             AgentRunOpts {
                 prepare_only: true,

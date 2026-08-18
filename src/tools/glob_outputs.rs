@@ -83,7 +83,7 @@ mod tests {
     #[tokio::test]
     async fn glob_finds_thread_files() {
         let mut root = std::env::temp_dir();
-        root.push(format!("nfs-glob-{}", std::process::id()));
+        root.push(format!("lore-glob-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("2026-07-13/thread")).unwrap();
         std::fs::create_dir_all(root.join("2026-07-20/thread")).unwrap();
