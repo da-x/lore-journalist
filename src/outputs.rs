@@ -140,7 +140,7 @@ pub struct RootIndexEntry {
     pub headline: String,
 }
 
-/// Render root `index.md` (newest weeks first).
+/// Render root `index.md` (newest weeks first, grouped by week-ending month).
 pub fn format_root_index(entries: &[RootIndexEntry], site_title: &str) -> String {
     let title = if site_title.trim().is_empty() {
         "Mailing List Weekly Summaries"
@@ -152,7 +152,16 @@ pub fn format_root_index(entries: &[RootIndexEntry], site_title: &str) -> String
         out.push_str("_No editions yet._\n");
         return out;
     }
+    let mut last_month = None;
     for e in entries {
+        let month = e.week.format("%B %Y").to_string();
+        if last_month.as_deref() != Some(month.as_str()) {
+            if last_month.is_some() {
+                out.push('\n');
+            }
+            out.push_str(&format!("## {month}\n\n"));
+            last_month = Some(month);
+        }
         let w = e.week.format("%Y-%m-%d");
         out.push_str(&format!(
             "- [Week ending {w}]({w}/index.md) — {}\n",
@@ -243,6 +252,49 @@ mod tests {
         let md = format_root_index(&[], "linux-fsdevel Weekly Summaries");
         assert!(md.starts_with("# linux-fsdevel Weekly Summaries\n"));
         assert!(!md.contains("NFS"));
+        assert!(!md.contains("## "));
+    }
+
+    #[test]
+    fn root_index_inserts_month_dividers() {
+        let md = format_root_index(
+            &[
+                RootIndexEntry {
+                    week: NaiveDate::from_ymd_opt(2026, 8, 3).unwrap(),
+                    headline: "August open".into(),
+                },
+                RootIndexEntry {
+                    week: NaiveDate::from_ymd_opt(2026, 7, 27).unwrap(),
+                    headline: "Late July".into(),
+                },
+                RootIndexEntry {
+                    week: NaiveDate::from_ymd_opt(2026, 7, 20).unwrap(),
+                    headline: "Mid July".into(),
+                },
+                RootIndexEntry {
+                    week: NaiveDate::from_ymd_opt(2025, 12, 29).unwrap(),
+                    headline: "Year wrap".into(),
+                },
+            ],
+            "Weekly Summaries",
+        );
+        assert_eq!(
+            md,
+            "# Weekly Summaries\n\
+             \n\
+             ## August 2026\n\
+             \n\
+             - [Week ending 2026-08-03](2026-08-03/index.md) — August open\n\
+             \n\
+             ## July 2026\n\
+             \n\
+             - [Week ending 2026-07-27](2026-07-27/index.md) — Late July\n\
+             - [Week ending 2026-07-20](2026-07-20/index.md) — Mid July\n\
+             \n\
+             ## December 2025\n\
+             \n\
+             - [Week ending 2025-12-29](2025-12-29/index.md) — Year wrap\n"
+        );
     }
 
     #[test]
