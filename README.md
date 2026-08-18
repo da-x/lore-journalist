@@ -4,6 +4,10 @@ Turns a lore-style git mail archive (ingested into SQLite) into **one completed 
 
 Design: [`doc/design.md`](doc/design.md).
 
+## Example
+
+[linux-nfs.kbuild.io](https://linux-nfs.kbuild.io) is a live HTML tree produced by this tool for the [linux-nfs](https://lore.kernel.org/linux-nfs/) mailing list.
+
 ## Build
 
 ```bash
