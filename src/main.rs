@@ -74,6 +74,15 @@ enum Commands {
         #[arg(long)]
         outputs: Option<PathBuf>,
     },
+    /// Rewrite `{outputs}/index.md` from complete week directories.
+    ///
+    /// Does not run agents or change week pages. Incomplete weeks are omitted.
+    /// Use after catalog format changes, or if the root index is missing/stale.
+    RegenerateRootIndex {
+        /// Override config.outputs_path.
+        #[arg(long)]
+        outputs: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -110,6 +119,9 @@ async fn main() -> Result<()> {
         }
         Commands::RenderHtml { html_dir, outputs } => {
             render_html_cmd(&config, outputs, html_dir)?;
+        }
+        Commands::RegenerateRootIndex { outputs } => {
+            regenerate_root_index_cmd(&config, outputs)?;
         }
     }
 
@@ -206,6 +218,21 @@ async fn summarize_week_cmd(
             },
         )?;
     }
+    Ok(())
+}
+
+fn regenerate_root_index_cmd(config: &Config, outputs_override: Option<PathBuf>) -> Result<()> {
+    let outputs = match outputs_override {
+        Some(p) => p,
+        None => require_outputs_path(&config.outputs_path)?,
+    };
+    let entries = crate::outputs::regenerate_root_index(&outputs, None, &config.list.title)?;
+    info!(
+        outputs = %outputs.display(),
+        weeks = entries.len(),
+        path = %crate::outputs::root_index_path(&outputs).display(),
+        "root index regenerated"
+    );
     Ok(())
 }
 

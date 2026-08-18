@@ -37,7 +37,7 @@ model_name = "..."
 api_key = "..."
 ```
 
-`outputs_path` is required for `summarize-week` and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/linux-nfs/`).
+`outputs_path` is required for `summarize-week`, `regenerate-root-index`, and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/linux-nfs/`).
 
 `html_site_url` is the public prefix of that HTML tree (used only for `og:url` and `<link rel="canonical">`). If it is unset, an `http(s)` `base_url` is used; `base_url = "/"` is ignored. Without a public prefix, pages still get `og:title` / `og:description` / Twitter Card tags. Slack’s crawler must be able to GET the pasted URL — a host that is only reachable on Tailscale will not unfurl from Slack’s cloud.
 
@@ -51,6 +51,7 @@ api_key = "..."
 | `meta` | Load the email index and print count / date range |
 | `grep PATTERN` | Regex search over composed subject + body |
 | `summarize-week` | Produce **one** week edition (lock, order, serial threads, overview, `.complete`); also HTML if `html_outputs_path` is set |
+| `regenerate-root-index` | Rewrite `{outputs}/index.md` from complete week dirs (no agents, no week rewrites) |
 | `render-html` | Convert the existing markdown tree to static HTML (backfill / CSS refresh) |
 
 ```bash
@@ -59,11 +60,18 @@ cargo run -- --config config.toml meta
 cargo run -- --config config.toml grep 'pnfs'
 cargo run -- --config config.toml summarize-week --start-week 2026-07-20
 cargo run -- --config config.toml summarize-week --week 2026-07-20
+cargo run -- --config config.toml regenerate-root-index
 cargo run -- --config config.toml render-html
 cargo run -- --config config.toml render-html --html-dir /path/to/weekly-html
 ```
 
 There is **no** `--concurrency` flag. Thread agents always run **serially** in the order from `.thread-order.json`.
+
+### `regenerate-root-index`
+
+Rewrites `{outputs}/index.md` from week directories that already have `.complete`. Headlines come from each week’s front matter. Incomplete weeks are skipped. Does not take the summarize lock, does not run agents, and does not rewrite week pages.
+
+`--outputs PATH` overrides `config.outputs_path`. After a catalog format change, run `render-html` as well if you publish the HTML tree.
 
 ### `summarize-week` flags
 
@@ -107,7 +115,7 @@ Empty weeks still write a stub `index.md`, update the root catalog, write `.comp
 ```
 {outputs_path}/
   .summarize-week.lock
-  index.md                          # root catalog (updated when a week completes)
+  index.md                          # root catalog (updated when a week completes, or via regenerate-root-index)
   2026-07-20/
     .complete                       # written last after fsync
     .thread-order.json              # resume state (not published)

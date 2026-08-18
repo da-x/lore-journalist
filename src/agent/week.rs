@@ -4,13 +4,13 @@ use super::session::{UsageStage, UsageTotals, WEEK_AGENT_TIMEOUT, run_until_subm
 use super::tool_build::build_week_tools;
 use crate::ids::file_stem_for_id;
 use crate::outputs::{
-    RootIndexEntry, complete_marker_path, root_index_path, thread_markdown_path, week_index_path,
-    write_atomic, write_complete_marker, write_root_index, yaml_double_quoted,
+    complete_marker_path, regenerate_root_index, root_index_path, thread_markdown_path,
+    week_index_path, write_atomic, write_complete_marker, yaml_double_quoted,
 };
 use crate::summarize::ActiveThread;
 use crate::tools::ToolCtx;
 use crate::tools::submit::SubmitSlot;
-use crate::week::{scan_week_dirs, week_window};
+use crate::week::week_window;
 use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
 use da_harness::OpenAIClient;
@@ -99,53 +99,6 @@ pub fn write_week_index(
     md.push_str(toc);
     write_atomic(&week_index_path(outputs_path, week), &md)?;
     Ok(())
-}
-
-/// Rebuild root index from all complete weeks plus optional extra (this week about to complete).
-pub fn regenerate_root_index(
-    outputs_path: &Path,
-    include_week: Option<(NaiveDate, &str)>,
-    site_title: &str,
-) -> Result<()> {
-    let (mut complete, _) = scan_week_dirs(outputs_path)?;
-    if let Some((w, _)) = include_week {
-        if !complete.contains(&w) {
-            complete.push(w);
-        }
-    }
-    complete.sort_unstable();
-    complete.reverse();
-
-    let mut entries = Vec::new();
-    for w in complete {
-        let headline = if let Some((iw, h)) = include_week {
-            if iw == w {
-                h.to_string()
-            } else {
-                read_headline(outputs_path, w).unwrap_or_else(|| "…".into())
-            }
-        } else {
-            read_headline(outputs_path, w).unwrap_or_else(|| "…".into())
-        };
-        entries.push(RootIndexEntry { week: w, headline });
-    }
-    write_root_index(outputs_path, &entries, site_title)?;
-    Ok(())
-}
-
-fn read_headline(outputs_path: &Path, w: NaiveDate) -> Option<String> {
-    let text = fs::read_to_string(week_index_path(outputs_path, w)).ok()?;
-    for line in text.lines().take(20) {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("headline:") {
-            let v = rest.trim();
-            if let Some(inner) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                return Some(inner.replace("\\\"", "\"").replace("\\\\", "\\"));
-            }
-            return Some(v.to_string());
-        }
-    }
-    None
 }
 
 /// Write week index + root catalog + `.complete` last.

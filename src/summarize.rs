@@ -10,12 +10,12 @@ use crate::config::ListConfig;
 use crate::email_index::{EmailIndex, EmailMeta, thread_root_id};
 use crate::lock::SummarizeLock;
 use crate::outputs::{
-    RootIndexEntry, complete_marker_path, ensure_week_layout, thread_markdown_path,
-    week_index_path, write_complete_marker, write_empty_week_index, write_root_index,
+    complete_marker_path, ensure_week_layout, read_week_headline, regenerate_root_index,
+    thread_markdown_path, write_complete_marker, write_empty_week_index,
 };
 use crate::tools::ToolCtx;
 use crate::week::{
-    ResolveWeekOutcome, assert_week_ended, resolve_week_from_outputs, scan_week_dirs, week_window,
+    ResolveWeekOutcome, assert_week_ended, resolve_week_from_outputs, week_window,
 };
 use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
@@ -150,58 +150,9 @@ pub async fn materialize_week(
 pub fn write_empty_week_stub(outputs_path: &Path, week: NaiveDate, site_title: &str) -> Result<()> {
     ensure_week_layout(outputs_path, week)?;
     write_empty_week_index(outputs_path, week)?;
-    let mut complete = scan_week_dirs(outputs_path)?.0;
-    if !complete.contains(&week) {
-        complete.push(week);
-        complete.sort_unstable();
-    }
-    let entries =
-        root_entries_for_complete_weeks(outputs_path, &complete, Some((week, "No activity")))?;
-    write_root_index(outputs_path, &entries, site_title)?;
+    regenerate_root_index(outputs_path, Some((week, "No activity")), site_title)?;
     write_complete_marker(outputs_path, week)?;
     Ok(())
-}
-
-/// Collect root index lines for complete weeks (newest first).
-fn root_entries_for_complete_weeks(
-    outputs_path: &Path,
-    complete: &[NaiveDate],
-    override_headline: Option<(NaiveDate, &str)>,
-) -> Result<Vec<RootIndexEntry>> {
-    let mut weeks: Vec<NaiveDate> = complete.to_vec();
-    weeks.sort_unstable();
-    weeks.reverse();
-
-    let mut entries = Vec::with_capacity(weeks.len());
-    for w in weeks {
-        let headline = if let Some((ow, h)) = override_headline {
-            if ow == w {
-                h.to_string()
-            } else {
-                read_week_headline(outputs_path, w).unwrap_or_else(|| "…".to_string())
-            }
-        } else {
-            read_week_headline(outputs_path, w).unwrap_or_else(|| "…".to_string())
-        };
-        entries.push(RootIndexEntry { week: w, headline });
-    }
-    Ok(entries)
-}
-
-fn read_week_headline(outputs_path: &Path, w: NaiveDate) -> Option<String> {
-    let path = week_index_path(outputs_path, w);
-    let text = fs::read_to_string(path).ok()?;
-    for line in text.lines().take(20) {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("headline:") {
-            let v = rest.trim();
-            if let Some(inner) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                return Some(inner.replace("\\\"", "\"").replace("\\\\", "\\"));
-            }
-            return Some(v.to_string());
-        }
-    }
-    None
 }
 
 /// Options for LLM agents during summarize-week.
@@ -529,7 +480,7 @@ pub async fn run_agents_for_week(
 /// Require `outputs_path` from config.
 pub fn require_outputs_path(config_outputs: &Option<String>) -> Result<PathBuf> {
     let Some(p) = config_outputs.as_ref() else {
-        bail!("config.outputs_path is required for summarize-week");
+        bail!("config.outputs_path is required");
     };
     if p.is_empty() {
         bail!("config.outputs_path is empty");
@@ -542,7 +493,7 @@ mod tests {
     use super::*;
     use crate::db::open_in_memory;
     use crate::lore::lore_url_for_message_id;
-    use crate::outputs::{format_message_list_lore, root_index_path};
+    use crate::outputs::{format_message_list_lore, root_index_path, week_index_path};
     use crate::week::week_window;
     use chrono::{TimeZone, Utc};
 

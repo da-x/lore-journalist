@@ -3,7 +3,7 @@
 //! Message bodies are **not** written under `outputs_path`. Citations use lore
 //! permalinks (`crate::lore`); cleaned bodies stay in SQLite for LLM tools only.
 
-use crate::week::week_window;
+use crate::week::{scan_week_dirs, week_window};
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use std::fs::{self, File};
@@ -182,6 +182,66 @@ pub fn write_root_index(
     Ok(())
 }
 
+/// Headline from `W/index.md` front matter, if present.
+pub fn read_week_headline(outputs_path: &Path, w: NaiveDate) -> Option<String> {
+    let text = fs::read_to_string(week_index_path(outputs_path, w)).ok()?;
+    for line in text.lines().take(20) {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("headline:") {
+            let v = rest.trim();
+            if let Some(inner) = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                return Some(inner.replace("\\\"", "\"").replace("\\\\", "\\"));
+            }
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+/// Collect root catalog lines for complete weeks (newest first).
+pub fn root_entries_for_complete_weeks(
+    outputs_path: &Path,
+    complete: &[NaiveDate],
+    override_headline: Option<(NaiveDate, &str)>,
+) -> Vec<RootIndexEntry> {
+    let mut weeks: Vec<NaiveDate> = complete.to_vec();
+    weeks.sort_unstable();
+    weeks.reverse();
+
+    let mut entries = Vec::with_capacity(weeks.len());
+    for w in weeks {
+        let headline = if let Some((ow, h)) = override_headline {
+            if ow == w {
+                h.to_string()
+            } else {
+                read_week_headline(outputs_path, w).unwrap_or_else(|| "…".to_string())
+            }
+        } else {
+            read_week_headline(outputs_path, w).unwrap_or_else(|| "…".to_string())
+        };
+        entries.push(RootIndexEntry { week: w, headline });
+    }
+    entries
+}
+
+/// Rebuild root `index.md` from complete week dirs, plus an optional week about
+/// to be marked complete (used while `.complete` is not on disk yet).
+pub fn regenerate_root_index(
+    outputs_path: &Path,
+    include_week: Option<(NaiveDate, &str)>,
+    site_title: &str,
+) -> Result<Vec<RootIndexEntry>> {
+    let (mut complete, _) = scan_week_dirs(outputs_path)?;
+    if let Some((w, _)) = include_week {
+        if !complete.contains(&w) {
+            complete.push(w);
+        }
+    }
+    let entries = root_entries_for_complete_weeks(outputs_path, &complete, include_week);
+    write_root_index(outputs_path, &entries, site_title)?;
+    Ok(entries)
+}
+
 /// Create empty `W/.complete` marker (call last after fsync of indexes).
 pub fn write_complete_marker(outputs_path: &Path, w: NaiveDate) -> Result<()> {
     let path = complete_marker_path(outputs_path, w);
@@ -253,6 +313,58 @@ mod tests {
         assert!(md.starts_with("# linux-fsdevel Weekly Summaries\n"));
         assert!(!md.contains("NFS"));
         assert!(!md.contains("## "));
+    }
+
+    #[test]
+    fn regenerate_root_index_uses_complete_weeks_only() {
+        let dir = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "nfs-root-index-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let _ = fs::remove_dir_all(&p);
+            fs::create_dir_all(&p).unwrap();
+            p
+        };
+
+        let jul = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let aug = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
+        let incomplete = NaiveDate::from_ymd_opt(2026, 8, 10).unwrap();
+        for (w, headline, complete) in [
+            (jul, "Mid July", true),
+            (aug, "August open", true),
+            (incomplete, "WIP", false),
+        ] {
+            fs::create_dir_all(week_dir(&dir, w)).unwrap();
+            write_atomic(
+                &week_index_path(&dir, w),
+                &format!("---\nheadline: \"{headline}\"\n---\n"),
+            )
+            .unwrap();
+            if complete {
+                write_complete_marker(&dir, w).unwrap();
+            }
+        }
+
+        let entries = regenerate_root_index(&dir, None, "Weekly Summaries").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].week, aug);
+        assert_eq!(entries[1].week, jul);
+
+        let md = fs::read_to_string(root_index_path(&dir)).unwrap();
+        assert!(md.contains("## August 2026"));
+        assert!(md.contains("## July 2026"));
+        assert!(md.contains("August open"));
+        assert!(md.contains("Mid July"));
+        assert!(!md.contains("2026-08-10"));
+        assert!(!md.contains("WIP"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
