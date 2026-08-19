@@ -147,7 +147,7 @@ async fn summarize_week_cmd(
         client: if prepare_only {
             None
         } else {
-            Some(client_from_config(&config))
+            Some(client_from_config(&config)?)
         },
         order_inference: None,
         thread_inference: None,

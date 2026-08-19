@@ -41,6 +41,8 @@ model_name = "..."
 api_key = "..."
 ```
 
+Set `model_name = "grok-build"` to use the Grok CLI chat proxy (`https://cli-chat-proxy.grok.com/v1`) with the required extra headers. In that mode `api_base` and `api_key` are ignored (dummy values are fine); the Bearer token is read from `~/.grok/auth.json`.
+
 `outputs_path` is required for `summarize-week`, `regenerate-root-index`, and `render-html`. `html_outputs_path` is optional; when set, a successful week publish also writes static HTML there. `lore_base_url` is the public archive prefix for this list (default `https://lore.kernel.org/`).
 
 `html_site_url` is the public prefix of that HTML tree (used only for `og:url` and `<link rel="canonical">`). If it is unset, an `http(s)` `base_url` is used; `base_url = "/"` is ignored. Without a public prefix, pages still get `og:title` / `og:description` / Twitter Card tags. Slack’s crawler must be able to GET the pasted URL — a host that is only reachable on Tailscale will not unfurl from Slack’s cloud.
