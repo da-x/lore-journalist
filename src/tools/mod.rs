@@ -2,6 +2,7 @@
 //!
 //! PR3: mail tools. PR4: outputs tools + related search. PR5 wraps these in `Tool::new`.
 
+pub mod dedup;
 pub mod get_email;
 pub mod glob_outputs;
 pub mod grep_emails;

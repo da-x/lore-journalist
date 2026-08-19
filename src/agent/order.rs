@@ -21,6 +21,7 @@ const ORDER_SYSTEM: &str = r#"You are planning work for a serial weekly mailing-
 Given the catalog of discussions active this week, decide the order in which they should be summarized.
 Prefer: foundational patches / parent series before follow-ups; discussions that other threads cite before dependents; independent topics last or by last activity.
 Use tools if helpful to check subjects and related roots. Do NOT write summaries.
+Do not repeat a read tool with the same arguments; duplicate calls return an error. Use the earlier result.
 
 CRITICAL — SubmitThreadOrder:
 - Call SubmitThreadOrder exactly once.

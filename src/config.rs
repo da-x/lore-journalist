@@ -120,6 +120,7 @@ impl ListConfig {
         }
         s.push_str(
             "Read thread/*.md files via ReadOutputFile as needed. Link discussions with relative paths like thread/<stem>.md.\n\
+             Do not repeat a read tool with the same arguments; duplicate calls return an error. Use the earlier result.\n\
              Call SubmitWeekOverview exactly once with a non-empty headline (one line) and markdown_body.\n",
         );
         s

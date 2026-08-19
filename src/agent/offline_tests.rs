@@ -10,15 +10,16 @@ mod tests {
     use crate::tools::ToolCtx;
     use crate::week::week_window;
     use async_openai::types::{
-        ChatCompletionMessageToolCall, ChatCompletionToolType, FunctionCall,
+        ChatCompletionMessageToolCall, ChatCompletionRequestMessage,
+        ChatCompletionRequestToolMessageContent, ChatCompletionToolType, FunctionCall,
     };
     use chrono::NaiveDate;
     use da_harness::multi_tool::{InferenceCallback, assistant_tool_calls};
     use futures::FutureExt;
     use std::collections::HashSet;
     use std::path::PathBuf;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     fn tool_call(id: &str, name: &str, arguments: &str) -> ChatCompletionMessageToolCall {
         ChatCompletionMessageToolCall {
@@ -219,6 +220,137 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(path, path2);
+
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    fn tool_message_texts(msgs: &[ChatCompletionRequestMessage]) -> Vec<&str> {
+        msgs.iter()
+            .filter_map(|m| match m {
+                ChatCompletionRequestMessage::Tool(t) => match &t.content {
+                    ChatCompletionRequestToolMessageContent::Text(s) => Some(s.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn offline_duplicate_get_email_returns_error_then_submit() {
+        let pool = open_in_memory().await.unwrap();
+        insert_test_email(
+            &pool,
+            " <solo@t>",
+            "Solo thread",
+            "alice@ex.com",
+            "2026-07-18T12:00:00+00:00",
+            "important body\n",
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+
+        let index = Arc::new(EmailIndex::load(&pool).await.unwrap());
+        let week = NaiveDate::from_ymd_opt(2026, 7, 20).unwrap();
+        let out = temp_out();
+        std::fs::create_dir_all(out.join("2026-07-20/thread")).unwrap();
+
+        let active = select_active_threads(&index, week);
+        assert_eq!(active.len(), 1);
+        let thread = &active[0];
+        let order = vec![thread.root_id.clone()];
+
+        let ctx = ToolCtx::new(
+            pool.clone(),
+            index.clone(),
+            out.clone(),
+            week,
+            week_window(week),
+        );
+
+        let body = serde_json::json!({
+            "title": "Solo summary",
+            "markdown_body": "This week **solo** moved forward.",
+            "key_message_ids": ["<solo@t>"]
+        })
+        .to_string();
+
+        let call = Arc::new(AtomicUsize::new(0));
+        let saw_dup = Arc::new(Mutex::new(false));
+        let saw_body = Arc::new(Mutex::new(false));
+        let cb: InferenceCallback = {
+            let saw_dup = saw_dup.clone();
+            let saw_body = saw_body.clone();
+            Arc::new(move |msgs| {
+                let n = call.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                let saw_dup = saw_dup.clone();
+                let saw_body = saw_body.clone();
+                async move {
+                    if n == 0 {
+                        Ok(assistant_tool_calls(vec![tool_call(
+                            "1",
+                            "GetEmail",
+                            r#"{"message_id":" <solo@t>"}"#,
+                        )]))
+                    } else if n == 1 {
+                        let texts = tool_message_texts(&msgs);
+                        assert!(
+                            texts.iter().any(|t| t.contains("important body")),
+                            "first GetEmail should return the body, got {texts:?}"
+                        );
+                        *saw_body.lock().unwrap() = true;
+                        Ok(assistant_tool_calls(vec![tool_call(
+                            "2",
+                            "GetEmail",
+                            r#"{"message_id":"<solo@t>"}"#,
+                        )]))
+                    } else if n == 2 {
+                        let texts = tool_message_texts(&msgs);
+                        let dup = texts
+                            .iter()
+                            .any(|t| t.contains("ERROR: duplicate GetEmail"));
+                        assert!(dup, "second GetEmail should be duplicate, got {texts:?}");
+                        *saw_dup.lock().unwrap() = true;
+                        Ok(assistant_tool_calls(vec![tool_call(
+                            "3",
+                            "SubmitThreadSummary",
+                            &body,
+                        )]))
+                    } else {
+                        Ok(da_harness::multi_tool::assistant_text("ok"))
+                    }
+                }
+                .boxed()
+            })
+        };
+
+        let path = run_thread_agent(
+            ctx,
+            week,
+            thread,
+            index.as_ref(),
+            &order,
+            1,
+            1,
+            None,
+            Some(cb),
+            crate::agent::session::UsageTotals::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(path.is_file());
+        assert!(
+            *saw_body.lock().unwrap(),
+            "expected first GetEmail to return the body"
+        );
+        assert!(
+            *saw_dup.lock().unwrap(),
+            "expected second GetEmail to return duplicate error"
+        );
 
         let _ = std::fs::remove_dir_all(&out);
     }

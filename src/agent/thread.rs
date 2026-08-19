@@ -133,6 +133,8 @@ pub fn build_thread_user_message(
            or listed below (normalized form, e.g. <...@...>).\n\
          - This week's in-window message bodies are included below when they fit. Use GetEmail /\n\
            ListThreadMessages for anything omitted or for earlier history; do not invent content.\n\
+         - Do not repeat a read tool with the same arguments; duplicate calls return an error.\n\
+           Use the earlier result.\n\
          - When finished, call SubmitThreadSummary exactly once with a non-empty markdown_body\n\
            (and a short title). Writing the summary as assistant text does not complete the task.\n\
          \n",
