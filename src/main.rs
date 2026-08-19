@@ -12,6 +12,7 @@ mod lore;
 mod models;
 mod outputs;
 mod summarize;
+mod tool_cli;
 mod tools;
 mod week;
 
@@ -83,6 +84,8 @@ enum Commands {
         #[arg(long)]
         outputs: Option<PathBuf>,
     },
+    /// Invoke a single LLM tool handler (same code path as the agents).
+    Tool(tool_cli::ToolCli),
 }
 
 #[tokio::main]
@@ -122,6 +125,9 @@ async fn main() -> Result<()> {
         }
         Commands::RegenerateRootIndex { outputs } => {
             regenerate_root_index_cmd(&config, outputs)?;
+        }
+        Commands::Tool(args) => {
+            tool_cli::run(config, args).await?;
         }
     }
 

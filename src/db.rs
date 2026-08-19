@@ -38,8 +38,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// In-memory SQLite pool with migrations applied (for tests).
-#[cfg(test)]
+/// In-memory SQLite pool with migrations applied (tests and output-only CLI tools).
 pub async fn open_in_memory() -> Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str("sqlite::memory:")?
         .create_if_missing(true)

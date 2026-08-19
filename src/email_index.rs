@@ -47,6 +47,15 @@ pub struct EmailIndex {
 }
 
 impl EmailIndex {
+    /// Empty index (output-only CLI tools that do not scan mail metadata).
+    pub fn empty() -> Self {
+        Self {
+            emails: Vec::new(),
+            by_message_id: HashMap::new(),
+            replies_to: HashMap::new(),
+        }
+    }
+
     /// Load all email metadata from the database (does not read `body`).
     ///
     /// Dual-ID contract: `message_id` is normalized; `message_id_raw` is the SQLite PK.

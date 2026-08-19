@@ -54,6 +54,7 @@ api_key = "..."
 | `build-db` | Walk the git mail repo and insert cleaned bodies into SQLite |
 | `meta` | Load the email index and print count / date range |
 | `grep PATTERN` | Regex search over composed subject + body |
+| `tool` | Invoke one LLM tool handler (same code as the agents); see below |
 | `summarize-week` | Produce **one** week edition (lock, order, serial threads, overview, `.complete`); also HTML if `html_outputs_path` is set |
 | `regenerate-root-index` | Rewrite `{outputs}/index.md` from complete week dirs (no agents, no week rewrites) |
 | `render-html` | Convert the existing markdown tree to static HTML (backfill / CSS refresh) |
@@ -62,6 +63,9 @@ api_key = "..."
 cargo run -- --config config.toml build-db
 cargo run -- --config config.toml meta
 cargo run -- --config config.toml grep 'regression'
+cargo run -- --config config.toml tool get-email --message-id '<id@example>'
+cargo run -- --config config.toml tool --week 2026-07-20 grep-emails --pattern 'nfsd'
+cargo run -- --config config.toml tool glob-outputs --pattern '*/thread/*.md'
 cargo run -- --config config.toml summarize-week --start-week 2026-07-20
 cargo run -- --config config.toml summarize-week --week 2026-07-20
 cargo run -- --config config.toml regenerate-root-index
@@ -70,6 +74,42 @@ cargo run -- --config config.toml render-html --html-dir /path/to/weekly-html
 ```
 
 There is **no** `--concurrency` flag. Thread agents always run **serially** in the order from `.thread-order.json`.
+
+### `tool`
+
+Runs **one** agent tool handler and prints the same text the model would see. Nested names are kebab-case of the LLM tool structs (`GrepEmails` → `grep-emails`). Top-level `grep` is a different full-corpus TTY search; use `tool grep-emails` for the capped agent tool.
+
+Shared flags (valid before or after the nested name):
+
+| Flag | Meaning |
+|---|---|
+| `--week YYYY-MM-DD` | Week ending date for `ToolCtx` (GrepEmails date default, `in_week`). Default: last complete week under outputs, else UTC today |
+| `--focus-thread-root ID` | Default thread root for `GrepEmails` / `ListThreadMessages` |
+| `--outputs PATH` | Override `config.outputs_path` |
+| `--allowed-thread-root ID` | Repeatable; scopes `SearchRelatedThreads` |
+
+| Nested command | Flags |
+|---|---|
+| `grep-emails` | `--pattern` (required), `--thread-root-id`, `--date-from`, `--date-to`, `--max-matches` |
+| `get-email` | `--message-id` (required) |
+| `list-thread-messages` | `--thread-root-id`, `--date-from`, `--date-to` |
+| `grep-outputs` | `--pattern` (required), `--glob`, `--max-matches` |
+| `glob-outputs` | `--pattern` (required) |
+| `read-output-file` | `--path` (required) |
+| `search-related-threads` | `--subject` (required), `--limit` |
+| `submit-thread-order` | `--ordered-root-id` (repeat, required), `--notes` |
+| `submit-thread-summary` | `--title`, `--markdown-body`, `--key-message-id` (repeat) |
+| `submit-week-overview` | `--headline`, `--markdown-body` |
+
+Mail tools load the email index from SQLite. Output tools only need `outputs_path` (config or `--outputs`). Submit subcommands are **dry-run**: they validate the payload and print `submitted` plus JSON; they do not write week files.
+
+```bash
+cargo run -- --config config.toml tool --help
+cargo run -- --config config.toml tool get-email --message-id '<20260720-example@kernel.org>'
+cargo run -- --config config.toml tool --week 2026-07-20 --focus-thread-root '<id>' grep-emails --pattern 'client hang'
+cargo run -- --config config.toml tool read-output-file --path 2026-07-20/index.md
+cargo run -- --config config.toml tool submit-week-overview --headline 'Busy week' --markdown-body 'See thread/a.md'
+```
 
 ### `regenerate-root-index`
 
